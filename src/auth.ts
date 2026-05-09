@@ -112,14 +112,28 @@ async function exchangeForSessionToken(
   csrfToken: string
 ): Promise<string> {
   const cookies = await jar.getCookies(WEB_ORIGIN);
-  const callbackUrl =
+  const rawCallbackUrl =
     cookies.find((c) => c.key.includes("callback-url"))?.value ?? WEB_ORIGIN;
+  const callbackUrl = decodeURIComponent(rawCallbackUrl);
+
+  // Next-Auth stores the CSRF cookie as "token%7Chash" (percent-encoded pipe).
+  // When sent back as-is, Next-Auth's split("|") fails → 403.
+  // Fix: re-set the cookie with the decoded value so "|" is sent literally.
+  const csrfCookie = cookies.find((c) => c.key.includes("csrf-token"));
+  if (csrfCookie && csrfCookie.value.includes("%7C")) {
+    csrfCookie.value = decodeURIComponent(csrfCookie.value);
+    await jar.setCookie(csrfCookie, WEB_ORIGIN);
+  }
 
   const res = await webClient.post(
     `${API_ENDPOINT}/auth/callback/sso`,
     qs.stringify({ token: authToken, csrfToken, callbackUrl }),
     {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": WEB_ORIGIN,
+        "Referer": `${WEB_ORIGIN}/`,
+      },
       maxRedirects: 0,
       validateStatus: (s) => s >= 200 && s < 400,
     }

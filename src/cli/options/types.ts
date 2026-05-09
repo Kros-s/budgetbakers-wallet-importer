@@ -7,6 +7,7 @@ export interface RunOptions {
     email: string | null;
     csvPath: string | null;
     yes: boolean;
+    direct: boolean;
     listLastRequested: boolean;
     rollbackLastRequested: boolean;
     listLastRecords: number;

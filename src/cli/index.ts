@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 
 import { login } from "../auth.js";
+import { loadDirectCredentials } from "../direct-auth.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import type { CsvRow, SkippedRow } from "../csv.js";
 import { convertRows, parseCsv, rowsToCsv, skippedRowsToCsv } from "../csv.js";
@@ -38,7 +39,9 @@ async function main() {
     console.log("\n── BudgetBakers CSV Importer ──\n");
 
     let sessionIndex = loadSessionIndex();
-    const email = await selectEmail(sessionIndex, options.email);
+    const email = options.direct
+        ? (options.email ?? "direct")
+        : await selectEmail(sessionIndex, options.email);
     const logFilePath = path.join(userDataDir(email), "logs", `importer-${runId}.log`);
     const log = createLogger(options.debug, logFilePath, options.logLevel);
 
@@ -49,49 +52,56 @@ async function main() {
     log("Log rotation completed", logRotation);
     log("Debug dump rotation completed", dumpRotation);
 
-    const indexedSession = sessionIndex.users[email];
-    const fallbackSession: UserSession | null = indexedSession
-        ? {
-            email,
-            sessionToken: indexedSession.sessionToken,
-            userId: indexedSession.userId,
-            savedAt: indexedSession.savedAt,
-        }
-        : null;
-    const savedSession = loadUserSession(email) ?? fallbackSession;
-
-    if (savedSession) {
-        console.log(`Found saved session for ${email} — skipping SSO.\n`);
-    }
-    log("Session state", {
-        hasSavedToken: Boolean(savedSession),
-        selectedEmail: email,
-        knownUsers: Object.keys(sessionIndex.users).length,
-    });
-
     let loginResult;
-    try {
-        loginResult = await login(email, savedSession?.sessionToken ?? null, log);
-    } catch (error) {
-        log.error("Initial login attempt failed", {
-            error: error instanceof Error ? error.message : String(error),
-        });
+
+    if (options.direct) {
+        loginResult = loadDirectCredentials();
+        log("Direct credentials loaded", { userId: loginResult.userId });
+        console.log(`\nDirect mode — skipping SSO (userId: ${loginResult.userId})\n`);
+    } else {
+        const indexedSession = sessionIndex.users[email];
+        const fallbackSession: UserSession | null = indexedSession
+            ? {
+                email,
+                sessionToken: indexedSession.sessionToken,
+                userId: indexedSession.userId,
+                savedAt: indexedSession.savedAt,
+            }
+            : null;
+        const savedSession = loadUserSession(email) ?? fallbackSession;
 
         if (savedSession) {
-            console.log("Session expired — starting fresh SSO flow.\n");
-            sessionIndex = removeUserSession(sessionIndex, email);
-            loginResult = await login(email, null, log);
-        } else {
-            throw new Error("Login failed", { cause: error });
+            console.log(`Found saved session for ${email} — skipping SSO.\n`);
         }
-    }
+        log("Session state", {
+            hasSavedToken: Boolean(savedSession),
+            selectedEmail: email,
+            knownUsers: Object.keys(sessionIndex.users).length,
+        });
 
-    sessionIndex = saveUserSession(sessionIndex, email, loginResult.sessionToken, loginResult.userId);
-    log("Login succeeded", {
-        userId: loginResult.userId,
-        hasReplicationToken: Boolean(loginResult.replication?.token),
-    });
-    console.log(`\nLogged in as ${email}\n`);
+        try {
+            loginResult = await login(email, savedSession?.sessionToken ?? null, log);
+        } catch (error) {
+            log.error("Initial login attempt failed", {
+                error: error instanceof Error ? error.message : String(error),
+            });
+
+            if (savedSession) {
+                console.log("Session expired — starting fresh SSO flow.\n");
+                sessionIndex = removeUserSession(sessionIndex, email);
+                loginResult = await login(email, null, log);
+            } else {
+                throw new Error("Login failed", { cause: error });
+            }
+        }
+
+        sessionIndex = saveUserSession(sessionIndex, email, loginResult.sessionToken, loginResult.userId);
+        log("Login succeeded", {
+            userId: loginResult.userId,
+            hasReplicationToken: Boolean(loginResult.replication?.token),
+        });
+        console.log(`\nLogged in as ${email}\n`);
+    }
 
     if (options.refreshCache) {
         console.log("Refreshing lookup cache from CouchDB...");

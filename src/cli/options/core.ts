@@ -102,6 +102,7 @@ export function parseRunOptionsOrThrow(args: string[]): RunOptions {
         email: null,
         csvPath: null,
         yes: false,
+        direct: false,
         listLastRequested: false,
         rollbackLastRequested: false,
         listLastRecords: 0,
@@ -117,6 +118,7 @@ export function parseRunOptionsOrThrow(args: string[]): RunOptions {
         else if (arg === "--no-debug") options.debug = false;
         else if (arg === "--refresh-cache") options.refreshCache = true;
         else if (arg === "--yes" || arg === "-y") options.yes = true;
+        else if (arg === "--direct") options.direct = true;
         else if (arg === "-h" || arg === "--help") throw new OptionsParseError("help", "help");
         else if (arg.startsWith("--list-last=")) {
             options.listLastRequested = true;
