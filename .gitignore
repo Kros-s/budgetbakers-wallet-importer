@@ -5,3 +5,6 @@ dist
 .budgetbakers-session.json
 debug
 data
+.DS_Store
+Statements/
+package-lock.json
