@@ -85,19 +85,25 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     args.push("--disallowedTools", opts.disallowedTools.join(","));
   }
 
-  args.push(prompt);
+  // The prompt is sent via stdin. Passing it as a positional argument is
+  // unsafe because commander's variadic flags (--allowedTools <tools...>,
+  // --disallowedTools <tools...>) greedily consume the next argv slot.
+  args.push("--input-format", "text");
 
   const start = Date.now();
   const child = spawn(config.claudeBin, args, {
     cwd: config.claudeCwd,
     env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
   child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+
+  child.stdin.write(prompt);
+  child.stdin.end();
 
   const timeoutMs = opts.timeoutMs ?? 180_000;
   const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
