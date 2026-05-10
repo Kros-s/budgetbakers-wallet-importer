@@ -48,15 +48,32 @@ export function buildCouchClient(rep: ReplicationConfig): AxiosInstance {
 
 /**
  * Generic helper — fetches all CouchDB documents whose `_id` starts with
- * `prefix` using `_all_docs` with startkey/endkey range query.
+ * `prefix` using `_all_docs` with a startkey/endkey range query.
+ *
+ * Uses GET with query params because CouchDB's `_all_docs` only recognises
+ * `startkey`/`endkey` from the URL; passing them in the body of a POST is
+ * silently ignored and the entire database is returned. That manifested
+ * as the "Pluxee" account name being shadowed by a `-StandingOrder_` doc
+ * sharing the same name, so records imported with `account: "Pluxee"`
+ * landed in the cash "Wallet" fallback (since the StandingOrder id is not
+ * a valid accountId in the records collection).
+ *
+ * `startkey`/`endkey` must be JSON-encoded (CouchDB requires quotes
+ * around string keys in query params).
  */
 async function fetchDocsWithPrefix<T>(
   couch: AxiosInstance,
   prefix: string
 ): Promise<T[]> {
-  const res = await couch.post<{ rows: Array<{ doc: T }> }>(
-    "/_all_docs?include_docs=true",
-    { startkey: prefix, endkey: `${prefix}\uffff` }
+  const res = await couch.get<{ rows: Array<{ doc: T }> }>(
+    "/_all_docs",
+    {
+      params: {
+        include_docs: true,
+        startkey: JSON.stringify(prefix),
+        endkey: JSON.stringify(`${prefix}\uffff`),
+      },
+    }
   );
   return res.data.rows.map((r) => r.doc).filter(Boolean);
 }
