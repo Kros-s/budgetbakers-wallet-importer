@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bbw-bot</string>
+
+  <!--
+    REPLACE __REPO_PATH__ with the absolute path to the cloned repo, e.g.
+      /Users/tony/Repos/budgetbakers-wallet-importer
+    This file is meant to be copied to ~/Library/LaunchAgents/ after edits.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO_PATH__/scripts/launchd/run-bot.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_PATH__</string>
+
+  <!-- Start on user login and keep restarting on crash / exit. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- Wait before restarting if the bot keeps crashing quickly. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- Log files. Rotation is up to the user (or a simple cron / newsyslog). -->
+  <key>StandardOutPath</key>
+  <string>__REPO_PATH__/data/bot/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO_PATH__/data/bot/launchd.err.log</string>
+
+  <!-- Inherit a minimal PATH; run-bot.sh extends it further. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
