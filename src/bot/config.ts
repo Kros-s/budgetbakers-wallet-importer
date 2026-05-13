@@ -12,6 +12,8 @@
  *   - CLAUDE_CWD                  defaults to process.cwd()
  *   - CLAUDE_MODEL                e.g. "sonnet" or "opus"; if unset, uses CLI default
  *   - CLAUDE_PERMISSION_MODE      defaults to "bypassPermissions"
+ *   - WHISPER_BIN                 path to whisper CLI; defaults to "whisper"
+ *   - WHISPER_MODEL               whisper model size; defaults to "base"
  */
 
 import os from "os";
@@ -25,6 +27,8 @@ export interface BotConfig {
   claudeCwd: string;
   claudeModel: string | null;
   claudePermissionMode: string;
+  whisperBin: string;
+  whisperModel: string;
 }
 
 function requireEnv(name: string): string {
@@ -65,5 +69,7 @@ export function loadBotConfig(): BotConfig {
     claudeModel: process.env.CLAUDE_MODEL?.trim() || null,
     claudePermissionMode:
       process.env.CLAUDE_PERMISSION_MODE?.trim() || "bypassPermissions",
+    whisperBin: process.env.WHISPER_BIN?.trim() || "whisper",
+    whisperModel: process.env.WHISPER_MODEL?.trim() || "small",
   };
 }

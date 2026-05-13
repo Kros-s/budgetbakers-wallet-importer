@@ -27,6 +27,8 @@ function inferExt(mimeType: string | null, fallback: string): string {
   if (mimeType.includes("png")) return ".png";
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return ".jpg";
   if (mimeType.includes("webp")) return ".webp";
+  if (mimeType.includes("ogg")) return ".ogg";
+  if (mimeType.includes("mp4") || mimeType.includes("mpeg")) return ".mp4";
   return fallback;
 }
 

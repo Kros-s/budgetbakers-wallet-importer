@@ -28,6 +28,7 @@ import type { Logger } from "../logger.js";
 import type { BotConfig } from "./config.js";
 import { runClaude } from "./claude-runner.js";
 import { downloadTelegramFile } from "./telegram-files.js";
+import { transcribeAudio } from "./whisper.js";
 import {
   getOrCreateSession,
   markTurnSent,
@@ -351,6 +352,63 @@ export function registerHandlers(deps: HandlerDeps): void {
       });
       await ctx.reply(
         `❌ Error procesando el documento: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  });
+
+  bot.on(message("voice"), async (ctx) => {
+    try {
+      const session = getOrCreateSession(ctx.chat.id);
+      const voice = ctx.message.voice;
+
+      await ctx.sendChatAction("typing").catch(() => {});
+      await ctx.reply("🎙️ Transcribiendo…").catch(() => {});
+
+      const downloaded = await downloadTelegramFile(bot, ctx, voice.file_id, {
+        downloadDir: config.downloadDir,
+        mimeType: voice.mime_type ?? "audio/ogg",
+        fallbackExt: ".ogg",
+      });
+
+      log("Voice received", {
+        chatId: ctx.chat.id,
+        path: downloaded.localPath,
+        duration: voice.duration,
+        size: downloaded.sizeBytes,
+      });
+
+      let transcript: string;
+      try {
+        transcript = await transcribeAudio(downloaded.localPath, {
+          whisperBin: config.whisperBin,
+          model: config.whisperModel,
+        });
+      } catch (err) {
+        await ctx.reply(
+          `⚠️ No pude transcribir el audio: ${err instanceof Error ? err.message : String(err)}\n\n` +
+            `Asegúrate de que whisper esté instalado:\n\`pip install openai-whisper\``
+        );
+        return;
+      }
+
+      if (!transcript) {
+        await ctx.reply(
+          "⚠️ No encontré texto en el audio. Intenta de nuevo o escribe el gasto."
+        );
+        return;
+      }
+
+      const prompt =
+        `El usuario envió un mensaje de voz (${voice.duration}s). Transcripción automática:\n\n"${transcript}"\n\n` +
+        `Extrae los movimientos mencionados y propón el CSV cuando estés listo, o pregunta lo que falte.`;
+
+      await processUserTurn(deps, ctx, session, prompt);
+    } catch (err) {
+      log.error("Voice handler failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await ctx.reply(
+        `❌ Error procesando el audio: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   });
