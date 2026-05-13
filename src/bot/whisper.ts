@@ -12,25 +12,25 @@ export async function transcribeAudio(
 ): Promise<string> {
   const bin = opts.whisperBin ?? "whisper";
   const model = opts.model ?? "base";
-  const outDir = os.tmpdir();
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "whisper-"));
 
-  await execFileAsync(
-    bin,
-    [
-      audioPath,
-      "--model", model,
-      "--output_format", "txt",
-      "--output_dir", outDir,
-      "--language", "es",
-      "--fp16", "False",
-    ],
-    { timeout: 120_000 }
-  );
+  try {
+    await execFileAsync(
+      bin,
+      [
+        audioPath,
+        "--model", model,
+        "--output_format", "txt",
+        "--output_dir", outDir,
+        "--language", "es",
+        "--fp16", "False",
+      ],
+      { timeout: 120_000 }
+    );
 
-  const basename = path.basename(audioPath, path.extname(audioPath));
-  const txtPath = path.join(outDir, `${basename}.txt`);
-  const transcript = fs.readFileSync(txtPath, "utf8").trim();
-  try { fs.unlinkSync(txtPath); } catch { /* ignore */ }
-
-  return transcript;
+    const stem = path.basename(audioPath, path.extname(audioPath));
+    return fs.readFileSync(path.join(outDir, `${stem}.txt`), "utf8").trim();
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
 }

@@ -16,6 +16,7 @@
  */
 
 import type { Context, Telegraf } from "telegraf";
+import { Markup } from "telegraf";
 import { message } from "telegraf/filters";
 
 import type { AxiosInstance } from "axios";
@@ -179,14 +180,16 @@ async function processUserTurn(
       createdAt: Date.now(),
     });
 
-    const preview = cleanedText
-      ? `${cleanedText}\n\n`
-      : "";
+    const preview = cleanedText ? `${cleanedText}\n\n` : "";
     const csvPreview = csv.length > 1500 ? csv.slice(0, 1500) + "\n…(truncado)" : csv;
+    const body = `${preview}📋 Propuesta (${rows.length} registro${rows.length === 1 ? "" : "s"}):\n\`\`\`\n${csvPreview}\n\`\`\``;
 
-    await sendLong(
-      ctx,
-      `${preview}📋 Propuesta (${rows.length} registro${rows.length === 1 ? "" : "s"}):\n\`\`\`\n${csvPreview}\n\`\`\`\n\nResponde *si* / *confirmar* para escribir, o *no* / *cancelar* para descartar.`
+    await ctx.reply(
+      body,
+      Markup.inlineKeyboard([
+        Markup.button.callback("✅ Confirmar", "confirm_pending"),
+        Markup.button.callback("❌ Cancelar", "cancel_pending"),
+      ])
     );
     return;
   }
@@ -411,6 +414,20 @@ export function registerHandlers(deps: HandlerDeps): void {
         `❌ Error procesando el audio: ${err instanceof Error ? err.message : String(err)}`
       );
     }
+  });
+
+  bot.action("confirm_pending", async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = getOrCreateSession(ctx.chat!.id);
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    await commitPending(deps, ctx as unknown as Context, session);
+  });
+
+  bot.action("cancel_pending", async (ctx) => {
+    await ctx.answerCbQuery();
+    takePending(ctx.chat!.id);
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    await ctx.reply("🗑️ Propuesta descartada.");
   });
 
   bot.on(message("text"), async (ctx) => {
