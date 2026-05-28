@@ -51,6 +51,7 @@ export interface CsvRow {
   category: string;
   note: string;
   payee: string;
+  label?: string;
 }
 
 /** A row that could not be converted, with a reason. */
@@ -72,7 +73,7 @@ export interface ParseResult {
 }
 
 /** The header for our custom CSV format. */
-export const CSV_HEADER = ["date", "account", "amount", "category", "note", "payee"] as const;
+export const CSV_HEADER = ["date", "account", "amount", "category", "note", "payee", "label"] as const;
 
 /**
  * Transfer rows are a special case: we accept common aliases and map them
@@ -216,6 +217,17 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
 
     const paymentType = isTransfer ? PAYMENT_TYPE.TRANSFER : PAYMENT_TYPE.CASH;
 
+    const rawLabel = row.label?.trim() || "";
+    let labelIds: string[] | undefined;
+    if (rawLabel) {
+      const labelId = maps.labels[rawLabel];
+      if (!labelId) {
+        skipped.push({ row, reason: `Unknown label: "${rawLabel}" — check app for exact name` });
+        continue;
+      }
+      labelIds = [labelId];
+    }
+
     const record: NewRecord = {
       accountId,
       currencyId,
@@ -227,6 +239,7 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
       recordDate,
       paymentType,
       transfer: isTransfer,
+      labelIds,
     };
 
     // ── Transfer pair linking ───────────────────────────────────────────────

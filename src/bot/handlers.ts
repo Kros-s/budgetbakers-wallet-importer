@@ -35,7 +35,9 @@ import {
   markTurnSent,
   resetSession,
   setPending,
+  setPendingMessageId,
   takePending,
+  clearAllPending,
   type BotSession,
 } from "./session.js";
 
@@ -57,17 +59,28 @@ Tu trabajo:
 4. Cuando tengas todo claro, propón los registros como CSV en este formato exacto:
 
 <<<CSV>>>
-date,account,amount,category,note,payee
-2026-05-09 12:00:00,Bancomer,-150.50,Restaurant fast-food,,Starbucks
+date,account,amount,category,note,payee,label
+2026-05-09 12:00:00,Bancomer,-150.50,Restaurant fast-food,,Starbucks,Comida 🥘
+2026-05-09 13:00:00,Bancomer,-500.00,Fuel,,PEMEX,Sentra
 <<<END>>>
 
-5. Antes y/o después del bloque CSV, agrega un resumen humano de 1-3 líneas de lo que vas a registrar.
+5. ANTES del bloque CSV, muestra siempre un resumen visual de los movimientos en este formato:
+
+💳 *Cuenta* | 📅 fecha | 💰 monto | 🏷️ categoría | 🏪 comercio | 🔖 label (si aplica)
+
+Ejemplo:
+💳 Bancomer | 📅 09 May 12:00 | 💸 -$150.50 | 🍔 Restaurant fast-food | 🏪 Starbucks | 🔖 Comida 🥘
+💳 Bancomer | 📅 09 May 13:00 | 💸 -$500.00 | ⛽ Fuel | 🏪 PEMEX | 🔖 Sentra
+
+Usa emojis contextuales según la categoría (🍔 comida, ⛽ gasolina, 🛒 despensa, 💊 salud, 🎬 entretenimiento, 🏠 hogar, etc.). Para ingresos usa 💰 en lugar de 💸. Al final del listado agrega el total: **Total: -$X.XX**
 
 REGLAS DURAS:
 - NUNCA ejecutes Bash con node, npm, pnpm, ni invoques dist/cli/index.js. El bot escribe a CouchDB después de que el usuario confirme con "si"/"confirmar".
 - NUNCA llames herramientas mcp__claude_ai_Wallet__ que escriban (esas son solo lectura, igual confirma).
 - Categorías y nombres de cuenta deben coincidir exactamente con los del usuario (ver memoria del proyecto: accounts.md, categories.md, feedback*.md).
 - Categorías con coma van entre comillas en el CSV (ej. "Restaurant, fast-food").
+- La columna \`label\` es opcional — omítela o déjala vacía si no aplica ningún label.
+- Los nombres de label deben coincidir exactamente con los de labels.md (ej. "Sentra", "Marlene", "Toll", "Comida 🥘"). Solo un label por fila.
 - Si no estás seguro de algún campo, pregunta. No inventes.
 - Mantén las respuestas concisas, este es un chat de Telegram.
 
@@ -128,6 +141,9 @@ async function processUserTurn(
       "Bash(tsx*)",
       "Bash(./dist/*)",
       "Bash(dist/*)",
+      // Wallet MCP tools can hang indefinitely in the subprocess; all needed
+      // label/account/category data is already in the project memory files.
+      "mcp__claude_ai_Wallet__*",
     ],
     timeoutMs: 240_000,
   });
@@ -180,17 +196,20 @@ async function processUserTurn(
       createdAt: Date.now(),
     });
 
+    const queueLen = session.pendingQueue.length;
+    const queueBadge = queueLen > 1 ? ` (${queueLen} pendientes)` : "";
     const preview = cleanedText ? `${cleanedText}\n\n` : "";
     const csvPreview = csv.length > 1500 ? csv.slice(0, 1500) + "\n…(truncado)" : csv;
-    const body = `${preview}📋 Propuesta (${rows.length} registro${rows.length === 1 ? "" : "s"}):\n\`\`\`\n${csvPreview}\n\`\`\``;
+    const body = `${preview}📋 Propuesta${queueBadge} — ${rows.length} registro${rows.length === 1 ? "" : "s"}:\n\`\`\`\n${csvPreview}\n\`\`\``;
 
-    await ctx.reply(
+    const sent = await ctx.reply(
       body,
       Markup.inlineKeyboard([
         Markup.button.callback("✅ Confirmar", "confirm_pending"),
         Markup.button.callback("❌ Cancelar", "cancel_pending"),
       ])
     );
+    setPendingMessageId(session.chatId, sent.message_id);
     return;
   }
 
@@ -200,9 +219,10 @@ async function processUserTurn(
 async function commitPending(
   deps: HandlerDeps,
   ctx: Context,
-  session: BotSession
+  session: BotSession,
+  messageId?: number
 ): Promise<void> {
-  const pending = takePending(session.chatId);
+  const pending = takePending(session.chatId, messageId);
   if (!pending) {
     await ctx.reply("No hay nada pendiente de confirmar.");
     return;
@@ -212,13 +232,20 @@ async function commitPending(
 
   const { records, originalRows, skipped } = convertRows(pending.rows, deps.lookup);
 
+  const skippedReasons = skipped
+    .slice(0, 5)
+    .map((s, i) => `[${i + 1}] ${s.reason}`)
+    .join("\n");
+
   if (records.length === 0) {
     await ctx.reply(
-      `⚠️ No quedaron registros válidos tras la conversión. ${skipped.length} fueron descartados.\n` +
-        skipped
-          .slice(0, 5)
-          .map((s, i) => `[${i + 1}] ${s.reason}`)
-          .join("\n")
+      `⚠️ No quedaron registros válidos. ${skipped.length} descartados:\n${skippedReasons}`
+    );
+    await processUserTurn(
+      deps, ctx, session,
+      `El CSV que propuse falló validación al intentar importarlo. ` +
+      `${skipped.length} registro(s) descartados:\n${skippedReasons}\n\n` +
+      `Por favor corrige y propón un nuevo CSV.`
     );
     return;
   }
@@ -252,8 +279,16 @@ async function commitPending(
 
   let msg = `✅ ${ok} registro${ok === 1 ? "" : "s"} escrito${ok === 1 ? "" : "s"}.`;
   if (fail > 0) msg += `\n❌ ${fail} fallaron en CouchDB.`;
-  if (skipped.length > 0) msg += `\n⏭️ ${skipped.length} omitidos en validación.`;
+  if (skipped.length > 0) msg += `\n⏭️ ${skipped.length} omitidos:\n${skippedReasons}`;
   await ctx.reply(msg);
+
+  if (skipped.length > 0) {
+    await processUserTurn(
+      deps, ctx, session,
+      `${skipped.length} registro(s) no pudieron importarse por errores de validación:\n${skippedReasons}\n\n` +
+      `Por favor corrígelos y propón un nuevo CSV solo para los registros fallidos.`
+    );
+  }
 }
 
 export function registerHandlers(deps: HandlerDeps): void {
@@ -283,8 +318,12 @@ export function registerHandlers(deps: HandlerDeps): void {
   });
 
   bot.command("cancel", async (ctx) => {
-    const taken = takePending(ctx.chat.id);
-    await ctx.reply(taken ? "🗑️ Propuesta descartada." : "Nada pendiente que cancelar.");
+    const cleared = clearAllPending(ctx.chat.id);
+    await ctx.reply(
+      cleared.length > 0
+        ? `🗑️ ${cleared.length} propuesta${cleared.length === 1 ? "" : "s"} descartada${cleared.length === 1 ? "" : "s"}.`
+        : "Nada pendiente que cancelar."
+    );
   });
 
   bot.on(message("photo"), async (ctx) => {
@@ -419,33 +458,38 @@ export function registerHandlers(deps: HandlerDeps): void {
   bot.action("confirm_pending", async (ctx) => {
     await ctx.answerCbQuery();
     const session = getOrCreateSession(ctx.chat!.id);
+    const messageId = ctx.callbackQuery.message?.message_id;
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-    await commitPending(deps, ctx as unknown as Context, session);
+    await commitPending(deps, ctx as unknown as Context, session, messageId);
   });
 
   bot.action("cancel_pending", async (ctx) => {
     await ctx.answerCbQuery();
-    takePending(ctx.chat!.id);
+    const messageId = ctx.callbackQuery.message?.message_id;
+    const taken = takePending(ctx.chat!.id, messageId);
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-    await ctx.reply("🗑️ Propuesta descartada.");
+    await ctx.reply(taken ? "🗑️ Propuesta descartada." : "Nada pendiente que cancelar.");
   });
 
   bot.on(message("text"), async (ctx) => {
     const text = ctx.message.text.trim();
     const session = getOrCreateSession(ctx.chat.id);
 
-    if (session.pending) {
+    if (session.pendingQueue.length > 0) {
       const word = text.toLowerCase();
+      // If the user replied to a specific proposal message, target that entry.
+      const replyToId = ctx.message.reply_to_message?.message_id;
+
       if (CONFIRM_WORDS.has(word)) {
-        await commitPending(deps, ctx, session);
+        await commitPending(deps, ctx, session, replyToId);
         return;
       }
       if (CANCEL_WORDS.has(word)) {
-        takePending(ctx.chat.id);
-        await ctx.reply("🗑️ Propuesta descartada.");
+        const taken = takePending(ctx.chat.id, replyToId);
+        await ctx.reply(taken ? "🗑️ Propuesta descartada." : "Nada pendiente que cancelar.");
         return;
       }
-      // Falls through: user is amending the proposal — let Claude refine it.
+      // Falls through: user is amending — let Claude refine it.
     }
 
     try {

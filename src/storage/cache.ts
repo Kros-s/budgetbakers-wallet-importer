@@ -34,6 +34,7 @@ export function writeLookupCache(email: string, userId: string, data: LookupData
             accounts: data.accounts.length,
             categories: data.categories.length,
             currencies: data.currencies.length,
+            labels: data.labels.length,
         },
         transferCategoryId: maps.transferCategoryId,
     };
@@ -41,6 +42,7 @@ export function writeLookupCache(email: string, userId: string, data: LookupData
     writeJsonFile(files.accounts, data.accounts);
     writeJsonFile(files.categories, data.categories);
     writeJsonFile(files.currencies, data.currencies);
+    writeJsonFile(files.labels, data.labels);
     writeJsonFile(files.maps, maps);
     writeJsonFile(files.metadata, metadata);
 
@@ -50,7 +52,7 @@ export function writeLookupCache(email: string, userId: string, data: LookupData
 export function loadLookupCache(email: string): LookupCacheSnapshot | null {
     const normalizedEmail = normalizeEmail(email);
     const files = userLookupFiles(normalizedEmail);
-    const requiredFiles = [files.metadata, files.accounts, files.categories, files.currencies, files.maps];
+    const requiredFiles = [files.metadata, files.accounts, files.categories, files.currencies, files.labels, files.maps];
 
     for (const filePath of requiredFiles) {
         if (!fs.existsSync(filePath)) return null;
@@ -61,6 +63,7 @@ export function loadLookupCache(email: string): LookupCacheSnapshot | null {
         const accounts = readJsonFile<LookupData["accounts"]>(files.accounts);
         const categories = readJsonFile<LookupData["categories"]>(files.categories);
         const currencies = readJsonFile<LookupData["currencies"]>(files.currencies);
+        const labels = readJsonFile<LookupData["labels"]>(files.labels);
         const maps = readJsonFile<LookupMaps>(files.maps);
 
         if (metadata.version !== 1) return null;
@@ -71,7 +74,7 @@ export function loadLookupCache(email: string): LookupCacheSnapshot | null {
                 ...metadata,
                 source: "cache",
             },
-            data: { accounts, categories, currencies },
+            data: { accounts, categories, currencies, labels },
             maps,
         };
     } catch {

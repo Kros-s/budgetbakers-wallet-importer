@@ -140,7 +140,7 @@ export async function writeRecords(
     suggestedEnvelopeId: 0,
     photos: [],
     refObjects: [],
-    labels: [],
+    labels: r.labelIds ?? [],
     reservedModelType: "Record" as const,
     reservedSource: "web" as const,
     reservedOwnerId: userId,

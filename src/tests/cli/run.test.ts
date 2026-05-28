@@ -18,6 +18,7 @@ function sampleLookupData(): LookupData {
         accounts: [{ _id: "-Account_a", _rev: "1-a", name: "Main", currencyId: "-Currency_ngn", position: 0, archived: false }],
         categories: [{ _id: "-Category_t", _rev: "1-c", name: "Transfer, withdraw", defaultType: 1 }],
         currencies: [{ _id: "-Currency_ngn", _rev: "1-c", code: "NGN" }],
+        labels: [],
     };
 }
 
@@ -28,6 +29,7 @@ function sampleLookupMaps(): LookupMaps {
         categories: { "Transfer, withdraw": "-Category_t" },
         currencies: { NGN: "-Currency_ngn" },
         transferCategoryId: "-Category_t",
+        labels: {},
     };
 }
 
@@ -42,7 +44,7 @@ function sampleCache(userId: string): LookupCacheSnapshot {
             email: "you@example.com",
             userKey: "abc",
             userId,
-            counts: { accounts: 1, categories: 1, currencies: 1 },
+            counts: { accounts: 1, categories: 1, currencies: 1, labels: 0 },
             transferCategoryId: "-Category_t",
         },
     };

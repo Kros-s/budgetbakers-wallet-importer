@@ -23,6 +23,7 @@ import type {
   AccountDoc,
   CategoryDoc,
   CurrencyDoc,
+  LabelDoc,
   LookupData,
   LookupMaps,
   ReplicationConfig,
@@ -107,16 +108,25 @@ export async function fetchCurrencies(couch: AxiosInstance): Promise<CurrencyDoc
 }
 
 /**
+ * Fetches all label (HashTag) documents from CouchDB, excluding archived ones.
+ */
+export async function fetchLabels(couch: AxiosInstance): Promise<LabelDoc[]> {
+  const docs = await fetchDocsWithPrefix<LabelDoc>(couch, "-HashTag_");
+  return docs.filter((d) => !d.archived && d.name?.trim());
+}
+
+/**
  * Fetches the raw lookup documents needed by the importer in one batch.
  */
 export async function fetchLookupData(couch: AxiosInstance): Promise<LookupData> {
-  const [accounts, categories, currencies] = await Promise.all([
+  const [accounts, categories, currencies, labels] = await Promise.all([
     fetchAccounts(couch),
     fetchCategories(couch),
     fetchCurrencies(couch),
+    fetchLabels(couch),
   ]);
 
-  return { accounts, categories, currencies };
+  return { accounts, categories, currencies, labels };
 }
 
 /**
@@ -163,6 +173,11 @@ export function buildLookupMapsFromData(data: LookupData): LookupMaps {
     categoryMap[c.name] = c._id; // full "-Category_<uuid>"
   }
 
+  const labelMap: Record<string, string> = {};
+  for (const l of data.labels) {
+    labelMap[l.name] = l._id;  // "Sentra" → "-HashTag_<uuid>"
+  }
+
   // The transfer category is looked up by name at runtime — no hardcoding.
   const transferCategoryId = categoryMap["Transfer, withdraw"] ?? null;
 
@@ -172,6 +187,7 @@ export function buildLookupMapsFromData(data: LookupData): LookupMaps {
     categories: categoryMap,
     currencies: currencyMap,
     transferCategoryId,
+    labels: labelMap,
   };
 }
 

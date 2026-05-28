@@ -51,6 +51,15 @@ export interface CurrencyDoc {
   [key: string]: unknown;
 }
 
+/** Label (HashTag) document shape from `_all_docs` with `-HashTag_` prefix. */
+export interface LabelDoc {
+  _id: string;  // "-HashTag_<uuid>"
+  _rev: string;
+  name: string;
+  archived?: boolean;
+  [key: string]: unknown;
+}
+
 /**
  * Confirmed shape of a `Record` document in CouchDB.
  * Every field is confirmed from real documents — nothing guessed.
@@ -116,6 +125,7 @@ export interface NewRecord {
   transfer: boolean;
   transferId?: string;
   transferAccountId?: string;
+  labelIds?: string[];  // ["-HashTag_<uuid>", ...]
 }
 
 /** CouchDB `_bulk_docs` response entry. */
@@ -151,6 +161,8 @@ export interface LookupMaps {
    * `null` only if the category is somehow absent from the user's account.
    */
   transferCategoryId: string | null;
+  /** Label name → full "-HashTag_<uuid>" (only non-archived labels). */
+  labels: Record<string, string>;
 }
 
 /** Raw lookup documents fetched from CouchDB before map conversion. */
@@ -158,6 +170,7 @@ export interface LookupData {
   accounts: AccountDoc[];
   categories: CategoryDoc[];
   currencies: CurrencyDoc[];
+  labels: LabelDoc[];
 }
 
 /** Session data persisted per user under data/<userKey>/session.json. */
@@ -195,6 +208,7 @@ export interface LookupCacheMetadata {
     accounts: number;
     categories: number;
     currencies: number;
+    labels: number;
   };
   transferCategoryId: string | null;
 }
@@ -204,6 +218,7 @@ export interface LookupCacheFiles {
   accounts: string;
   categories: string;
   currencies: string;
+  labels: string;
   maps: string;
 }
 

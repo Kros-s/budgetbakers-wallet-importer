@@ -37,6 +37,7 @@ export function userLookupFiles(email: string): LookupCacheFiles {
         accounts: path.join(dir, "accounts.json"),
         categories: path.join(dir, "categories.json"),
         currencies: path.join(dir, "currencies.json"),
+        labels: path.join(dir, "labels.json"),
         maps: path.join(dir, "maps.json"),
     };
 }

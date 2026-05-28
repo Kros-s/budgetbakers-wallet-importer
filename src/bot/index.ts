@@ -78,7 +78,7 @@ async function main() {
       `${Object.keys(lookup.currencies).length} currencies\n`
   );
 
-  const bot = new Telegraf(config.telegramBotToken);
+  const bot = new Telegraf(config.telegramBotToken, { handlerTimeout: 300_000 });
   registerHandlers({
     bot,
     config,
