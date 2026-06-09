@@ -41,7 +41,7 @@ import {
   type BotSession,
 } from "./session.js";
 
-interface HandlerDeps {
+export interface HandlerDeps {
   bot: Telegraf;
   config: BotConfig;
   couch: AxiosInstance;
@@ -50,7 +50,7 @@ interface HandlerDeps {
   log: Logger;
 }
 
-const SYSTEM_PROMPT = `Eres un asistente de finanzas integrado en un bot de Telegram para BudgetBakers Wallet. El usuario te enviará fotos de tickets, PDFs de estados de cuenta o texto describiendo gastos.
+export const SYSTEM_PROMPT = `Eres un asistente de finanzas integrado en un bot de Telegram para BudgetBakers Wallet. El usuario te enviará fotos de tickets, PDFs de estados de cuenta o texto describiendo gastos.
 
 Tu trabajo:
 1. Analizar el contenido (lee imágenes/PDFs con Read si te dan un path).
@@ -100,7 +100,7 @@ function isAllowed(ctx: Context, allowed: Set<number>): boolean {
 
 const CSV_BLOCK_RE = /<<<CSV>>>\s*([\s\S]*?)\s*<<<END>>>/;
 
-function extractCsvBlock(text: string): { csv: string | null; cleanedText: string } {
+export function extractCsvBlock(text: string): { csv: string | null; cleanedText: string } {
   const m = text.match(CSV_BLOCK_RE);
   if (!m) return { csv: null, cleanedText: text };
   const csv = m[1].trim();

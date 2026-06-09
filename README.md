@@ -1,361 +1,246 @@
-# BudgetBakers CSV Importer
+# BudgetBakers Wallet Importer
 
-A command-line tool that writes transactions directly into your BudgetBakers / Wallet database — bypassing the official
-import pipeline to preserve full timestamps and support multiple accounts in a single file.
+Automated transaction pipeline for BudgetBakers / Wallet. Combines three things in a single always-on process:
+
+1. **Telegram bot** — chat with Claude to record transactions, confirm proposals, rollback mistakes.
+2. **Email webhook** — bank notification emails are parsed by Claude and written automatically, or routed to Telegram for confirmation.
+3. **CSV importer CLI** — batch-import from a CSV file (the original tool, still works).
+
+All three share the same CouchDB connection, lookup maps, and Claude session infrastructure.
 
 ---
 
-## Why this exists
+## How it works
 
-The official Wallet app import has two hard limitations:
+```
+Bank email → Cloudflare Email Worker
+               → POST /webhook/email (Cloudflare Tunnel → Mac Mini :8765)
+               → Claude extracts transaction (CSV)
+               → All fields resolved? → silent write to CouchDB + Telegram notification
+               → Missing fields?     → Telegram proposal with ✅ ❌ buttons
+               → Claude asks a question? → message forwarded to Telegram (multi-turn session)
+               → Duplicate detected?  → Telegram warning, no write
 
-| Limitation                       | Impact                                                               |
-| -------------------------------- | -------------------------------------------------------------------- |
-| Date format is `yyyy-MM-dd` only | Time of day is always stripped — every transaction lands at midnight |
-| One account per import file      | Multi-account bank statements require splitting and multiple imports |
+Telegram message → Claude multi-turn conversation
+                 → Proposes CSV → user confirms → writes to CouchDB
 
-This tool writes directly to the CouchDB database that powers the app, so timestamps are preserved to the second and
-every row can target a different account.
+Every day at 21:00 → Telegram daily summary of all recorded transactions
+```
 
 ---
 
 ## Requirements
 
 - Node.js 18+
-- A BudgetBakers / Wallet account
+- [Claude Code CLI](https://claude.ai/code) authenticated with a Claude Max account (`claude` binary in PATH)
+- A BudgetBakers / Wallet account with CouchDB credentials
+- A Telegram bot token (from BotFather)
+- Cloudflare account (for the email worker + tunnel)
 
 ---
 
 ## Setup
 
+### 1. Install dependencies
+
 ```bash
 git clone <repo>
-cd budgetbakers
+cd budgetbakers-wallet-importer
 npm install
 ```
 
-If published on npm, install globally:
+### 2. Configure environment
+
+Copy `.env.local.example` to `.env.local` and fill in all values:
 
 ```bash
-npm install -g budgetbakers-wallet-importer
+cp .env.local.example .env.local
+```
+
+Required variables:
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token from BotFather |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | Comma-separated list of allowed Telegram chat IDs |
+| `COUCH_URL` | BudgetBakers CouchDB endpoint |
+| `COUCH_DB` | Database name (`bb-<userId>`) |
+| `COUCH_LOGIN` | Replication login (userId UUID) |
+| `COUCH_TOKEN` | Replication token |
+| `COUCH_USER_ID` | Same as `COUCH_LOGIN` |
+| `WEBHOOK_SECRET` | Shared secret between Cloudflare Worker and this server |
+| `WEBHOOK_PORT` | Port for the webhook HTTP server (default: `8765`) |
+
+### 3. Run
+
+```bash
+npm run main        # bot + webhook server (always-on)
+npm start           # CLI importer (interactive, one-shot)
+```
+
+### 4. Run as a macOS service (LaunchAgent)
+
+A plist template is included. Copy it to `~/Library/LaunchAgents/` and load it:
+
+```bash
+cp scripts/launchd/com.iubix.webserver.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.iubix.webserver.plist
+```
+
+Logs go to `data/bot/main.log`.
+
+---
+
+## Cloudflare setup
+
+### Email Worker
+
+Create a Cloudflare Email Worker that receives emails at your domain and POSTs to the webhook:
+
+```js
+import PostalMime from "postal-mime";
+
+export default {
+  async email(message, env) {
+    const parsed = await PostalMime.parse(message.raw);
+    await fetch(env.WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": env.WEBHOOK_SECRET,
+      },
+      body: JSON.stringify({
+        from: message.from,
+        subject: message.headers.get("subject") ?? "",
+        text: parsed.text ?? "",
+      }),
+    });
+  },
+};
+```
+
+Worker secrets: `WEBHOOK_URL` (e.g. `https://wallet.yourdomain.com/webhook/email`), `WEBHOOK_SECRET`.
+
+### Tunnel
+
+```bash
+cloudflared tunnel create webhook
+cloudflared tunnel route dns webhook wallet.yourdomain.com
+```
+
+Config at `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <tunnel-id>
+credentials-file: ~/.cloudflared/<tunnel-id>.json
+ingress:
+  - hostname: wallet.yourdomain.com
+    service: http://127.0.0.1:8765
+  - service: http_status:404
 ```
 
 ---
 
-## Usage
+## Telegram bot commands
+
+| Command / action | What it does |
+|---|---|
+| Send any message | Claude processes it as a transaction description |
+| Confirm (`✅` or "si") | Writes the last proposed CSV to CouchDB |
+| Cancel (`❌` or `/cancel`) | Discards the pending proposal |
+| `/reset` | Starts a new Claude conversation session |
+| Voice message | Transcribed via Whisper, then processed as text |
+
+---
+
+## Email pipeline — transaction flows
+
+| Scenario | Result |
+|---|---|
+| All fields resolved | Silent write + Telegram success notification |
+| Unknown account or category | Proposal sent to Telegram with ✅ ❌ buttons |
+| Claude asks a clarifying question | Message forwarded to Telegram; reply continues the conversation |
+| Same account + amount already recorded today | Telegram duplicate warning; nothing written |
+| Not a transaction (marketing, OTP) | Silently ignored (`NO_TRANSACTION`) |
+
+---
+
+## CSV importer CLI
+
+The original batch import tool. Writes transactions from a CSV file directly to CouchDB.
 
 ```bash
 npm start
 ```
 
-If installed globally from npm:
-
-```bash
-budgetbakers-wallet-importer
-```
-
-Debug logging is enabled by default to help diagnose failures. You can disable it from run params:
-
-```bash
-npm start -- --no-debug
-```
-
-You can also pass `--debug` explicitly.
-
-Set minimum log level with `--log-level` (`info`, `warn`, or `error`):
-
-```bash
-npm start -- --log-level warn
-```
-
-Logging is always written to a run log file under each user folder:
-
-`./data/<user-hash>/logs/importer-<timestamp>.log`
-
-`--debug` controls console verbosity only. File logging stays enabled in both modes.
-Logs are automatically pruned to keep the latest 40 per user.
-
-Use `--refresh-cache` to force a fresh lookup fetch from CouchDB:
-
-```bash
-npm start -- --refresh-cache
-```
-
-For automation / non-interactive runs:
+Non-interactive mode:
 
 ```bash
 npm start -- --email you@example.com --csv ./transactions.csv --yes
 ```
 
-- `--email` skips email selection prompts
-- `--csv` skips CSV path prompt
-- `--yes` skips final write confirmation prompt
-
 Rollback helpers:
 
 ```bash
-# Preview the last 20 published Record docs
 npm start -- --list-last 20
-
-# Preview the last 20 records within a timestamp window
-npm start -- --list-last 20 --start-ts "2026-03-23T08:00:00Z" --end-ts "2026-03-23T09:00:00Z"
-
-# Delete (rollback) the last 20 published Record docs
 npm start -- --rollback-last 20
-
-# Delete (rollback) the last 20 records in a timestamp window
 npm start -- --rollback-last 20 --start-ts "2026-03-23T08:00:00Z" --end-ts "2026-03-23T09:00:00Z"
 ```
 
-- `--list-last <count>` lists recent records and exits
-- `--rollback-last <count>` lists then deletes those records after confirmation
-- `--start-ts <timestamp>` optional lower bound for filtering by `created` time
-- `--end-ts <timestamp>` optional upper bound for filtering by `created` time
-- timestamp filters are applied after fetching the requested last `<count>` records
-- Add `--yes` to skip the interactive confirmation prompt in rollback mode
-
-If the app behaves unexpectedly after an import, use --rollback-last to revert the most recent records, check what failed (for example an invalid date format), then rerun after fixing the source CSV.
-
-Small batches are optional, but they can make errors easier to catch early when troubleshooting.
-
-When debug is enabled, the importer writes CouchDB lookup dumps under the selected user's data folder:
-
-`./data/<user-hash>/debug/couch-lookups-<timestamp>/`
-
-- `metadata.json`
-- `accounts.json`
-- `categories.json`
-- `currencies.json`
-- `maps.json`
-
-The tool will ask for:
-
-1. **Email selection** — choose a saved email or type a new one
-2. **The SSO token** — only needed when no valid saved session exists
-3. **Path to your CSV file**
-4. **Confirmation** — shows a summary before writing anything
-
-Sessions are indexed in `.budgetbakers-session.json` (email -> session details) and stored per user in
-`data/<user-hash>/session.json`.
-Lookup data (`accounts.json`, `categories.json`, `currencies.json`, `maps.json`, `metadata.json`) is cached per user
-in that same `data/<user-hash>/` directory and reused by default.
-
-Cache files are not treated as dumps. The remaining "dump" output is debug snapshots under
-`data/<user-hash>/debug/couch-lookups-<timestamp>/`, created only when debug mode is enabled.
-Debug snapshots are automatically pruned to keep the latest 20 per user.
-
----
-
-## CSV format
-
-Create a plain CSV file with these six columns:
-
-```
-date,account,amount,category,note,payee
-```
-
-### Example
+### CSV format
 
 ```csv
 date,account,amount,category,note,payee
 2026-01-27 02:31:00,First Bank,-53.75,Charges & Fees,Stamp Duty,
-2026-01-27 02:31:00,First Bank,-78.00,Charges & Fees,Stamp Duty,
 2026-01-29 13:33:00,First Bank,-300000,Transfer,,
 2026-01-29 13:33:00,Palmpay,300000,Transfer,,
 2026-02-10 11:25:00,First Bank,300000,Wage & invoices,,Company XYZ
-2026-02-08 16:52:00,First Bank,-8520,Restaurant & fast-food,,Chowdeck
 ```
 
-### Column reference
+| Column | Required | Notes |
+|---|---|---|
+| `date` | yes | `YYYY-MM-DD HH:MM:SS` — interpreted as local time |
+| `account` | yes | Exact account name as it appears in the app |
+| `amount` | yes | Signed float. Negative = expense, positive = income |
+| `category` | yes | Exact category name, or `Transfer` / `Transfer withdraw` |
+| `note` | no | Free text |
+| `payee` | no | Stored as a separate field |
 
-| Column     | Required | Format                | Notes                                                |
-| ---------- | -------- | --------------------- | ---------------------------------------------------- |
-| `date`     | yes      | `YYYY-MM-DD HH:MM:SS` | Interpreted as local time (preserves entered hour)   |
-| `account`  | yes      | text                  | Must match the account name in the app exactly       |
-| `amount`   | yes      | signed number         | Negative = expense, positive = income                |
-| `category` | yes      | text                  | Must match the category name in the app exactly      |
-| `note`     | no       | text                  | Optional description                                 |
-| `payee`    | no       | text                  | Stored as a separate field, not embedded in the note |
-
-Date normalization:
-
-- Importer writes `recordDate` in canonical format: `YYYY-MM-DDTHH:mm:ss.SSS±HH:mm`
-- Input date values are interpreted as local wall-clock time and normalized before upload
-- Supported input examples include `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM:SS`, and `M/D/YYTHH:mm(.SSS)(±HH:mm)`
-
-### What you don't need to fill in
-
-| Field            | How it's determined                                      |
-| ---------------- | -------------------------------------------------------- |
-| Currency         | Taken from the account's own currency — no column needed |
-| Income / expense | Sign of `amount`                                         |
-| Transfer flag    | Detected automatically — see Transfers below             |
-| Payment type     | Electronic for transfers, cash for everything else       |
-
-### Transfers
-
-Write two rows with the same `date` and category `Transfer` (or whatever you named the transfer category in the app).
-The importer links them automatically.
-
-```csv
-2026-01-29 13:33:00,First Bank,-300000,Transfer,,
-2026-01-29 13:33:00,Palmpay,300000,Transfer,,
-```
-
-Both the category name and the timestamp must match for the pair to be linked. If a transfer row has no matching second
-leg, it is moved to the failure file with an explanation.
-
----
-
-## Output files
-
-After each run, two files are written alongside your input CSV:
-
-| File                 | Contents                                            |
-| -------------------- | --------------------------------------------------- |
-| `<name>_success.csv` | Rows that were written to BudgetBakers successfully |
-| `<name>_failure.csv` | Rows that failed, with an extra `reason` column     |
-
-The failure file is already in the correct CSV format — fix the issues, rename it, and re-run it as the input.
-
-### Example terminal output
-
-```
-── BudgetBakers CSV Importer ──
-
-Found saved session — skipping SSO.
-
-Logged in as you@example.com
-
-Fetching accounts, categories and currencies from CouchDB...
-  18 accounts  ·  62 categories  ·  2 currencies
-
-Expected CSV format:
-  date,account,amount,category,note,payee
-  ...
-
-Path to CSV file: ~/transactions.csv
-
-Parsing CSV...
-
-  Total rows:         55
-  Ready to import:    53
-  Skipped (bad data): 2
-
-  Skipped reasons:
-    [2×] Unknown category: "Food" — check app for exact name
-
-Write 53 records to BudgetBakers? [y/N] y
-
-Writing records...
-
-✓ 53 records written successfully
-✗ 2 rows failed
-  (2 bad data, 0 CouchDB rejections)
-
-Success CSV → ~/transactions_success.csv
-Failure CSV → ~/transactions_failure.csv
-```
-
----
-
-## Common errors
-
-**`Unknown account: "First Bank"`**
-The account name in your CSV does not match the app exactly. Open the app, check the account name, and update your CSV.
-
-**`Unknown category: "Food" — check app for exact name`**
-Same as above for categories. Category names are case-sensitive and must match character for character, except
-transfer aliases like `TRANSFER` and `Transfer` which are mapped to the app's transfer category.
-
-**`Transfer row has no matching pair`**
-A row with the transfer category has no corresponding second row with the same timestamp. Check that both legs have the
-exact same `date` string.
-
-**`Session expired — starting fresh SSO flow`**
-Your saved session token has expired. The tool handles this automatically — it clears the old token and triggers a new
-SSO email.
+Transfer pairs are detected automatically when two rows share the same `date` and transfer category.
 
 ---
 
 ## Project structure
 
 ```
-budgetbakers/
-├── src/
-│   ├── cli/
-│   │   ├── index.ts       Main orchestration flow
-│   │   ├── interaction.ts Prompting and saved-email selection UX
-│   │   ├── maintenance.ts List/revert recent records flow
-│   │   ├── options/
-│   │   │   ├── index.ts   CLI options entry + help/exit behavior
-│   │   │   ├── core.ts    Pure argument parsing and validation
-│   │   │   └── types.ts   Shared RunOptions interfaces
-│   │   ├── run.ts         Run helpers + cache/couch lookup resolver
-│   ├── auth.ts            Next-Auth SSO login flow
-│   ├── couch.ts           CouchDB client and runtime lookup maps
-│   ├── csv.ts             CSV parser, converter, and serialiser
-│   ├── date-time.ts       Local date parsing + ISO normalization
-│   ├── logger.ts          File/console logger with redaction and levels
-│   ├── records.ts         CouchDB _bulk_docs writer + recent-record listing/deletes
-│   ├── security/
-│   │   └── tokens.ts      Token extraction/validation helpers
-│   ├── storage/
-│   │   ├── index.ts       Storage barrel exports
-│   │   ├── paths.ts       User-path and key resolution
-│   │   ├── session.ts     Session index and user session persistence
-│   │   ├── cache.ts       Lookup cache read/write
-│   │   └── dumps.ts       Debug dump writing and retention pruning
-│   ├── tests/
-│   │   ├── cli/
-│   │   │   ├── maintenance.test.ts
-│   │   │   ├── run.test.ts
-│   │   │   └── options/core.test.ts
-│   │   ├── csv.test.ts
-│   │   └── date-time.test.ts
-│   ├── types.ts           Shared TypeScript interfaces
-├── api.md       Full API reference (endpoints, field values, curl examples)
-├── package.json
-└── tsconfig.json
+src/
+├── main.ts                  Entry point: bot + webhook server + daily summary
+├── bot/
+│   ├── claude-runner.ts     Spawns `claude -p` and parses output
+│   ├── config.ts            Bot config from env vars
+│   ├── handlers.ts          Telegraf message/callback handlers, SYSTEM_PROMPT
+│   ├── index.ts             Bot-only entry point (legacy)
+│   └── session.ts           In-memory session state per chat (pending queue, Claude session ID)
+├── webhook/
+│   ├── server.ts            HTTP server (POST /webhook/email)
+│   ├── email-processor.ts   Email → Claude → write or Telegram fallback
+│   └── daily-tracker.ts     In-memory daily log (JSONL), dedup, end-of-day summary
+├── cli/                     Interactive CLI importer
+├── auth.ts                  BudgetBakers SSO login flow
+├── couch.ts                 CouchDB client and lookup map builder
+├── csv.ts                   CSV parser and row → CouchDB record converter
+├── date-time.ts             Local date parsing and ISO normalization
+├── direct-auth.ts           Direct credential loader from env vars (no SSO needed)
+├── logger.ts                File/console logger with secret redaction
+├── records.ts               _bulk_docs writer and recent-record listing/deletes
+└── types.ts                 Shared TypeScript interfaces
 ```
-
-### Architecture overview
-
-- `cli/index.ts` coordinates flow only.
-- `cli/options/*` owns all CLI argument parsing and validation.
-- `cli/interaction.ts` handles all interactive questions.
-- `cli/maintenance.ts` handles list/revert flows for recent records.
-- `cli/run.ts` contains run utilities and testable cache-resolution logic.
-- `storage/*` owns persistence concerns (session index, per-user cache, dump and log file housekeeping).
-- `security/tokens.ts` isolates token extraction/validation utilities.
-- `auth.ts`, `couch.ts`, `records.ts`, `csv.ts`, and `date-time.ts` stay focused on external integrations and data conversion.
-- `src/tests/*` mirrors source-module paths for maintainable test discovery.
 
 ---
 
-## How it works
+## Security notes
 
-BudgetBakers stores all data in a personal CouchDB database:
-
-```
-https://couch-prod-eu-2.budgetbakers.com/bb-{userId}/
-```
-
-The mobile and web apps use PouchDB to sync changes to this database. This tool authenticates with the same credentials
-the app uses and writes `Record` documents directly via `_bulk_docs` — the same way the app itself does, just without
-going through the web UI.
-
-Authentication is handled via BudgetBakers' Next-Auth SSO flow. After the first login the session token is cached
-locally, so subsequent runs don't require an SSO email.
-
-Full technical details including all confirmed endpoint shapes, field values, and curl examples are in [api.md](api.md).
-
----
-
-## Limitations
-
-- **CouchDB only** — this writes directly to the database. If BudgetBakers changes their database infrastructure, the
-  tool will need updating.
-- **No duplicate detection** — running the same CSV twice will create duplicate records. Use the `_success.csv` output
-  to track what has already been imported.
-- **No edit flow** — record updates are not supported. Rollback supports delete-only for targeted recent records.
+- All secrets are loaded from `.env.local` (git-ignored).
+- The webhook server validates `X-Webhook-Secret` on every request and binds to `127.0.0.1` only — never exposed directly to the internet; traffic reaches it through the Cloudflare Tunnel.
+- Claude runs with `--permission-mode bypassPermissions` scoped to the project directory.
+- The logger redacts known sensitive field names (`token`, `password`, `secret`, etc.) from all structured log output.

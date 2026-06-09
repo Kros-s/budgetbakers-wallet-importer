@@ -16,6 +16,7 @@
   },
   "scripts": {
     "start": "tsx src/cli/index.ts",
+    "main": "tsx src/main.ts",
     "bot": "tsx src/bot/index.ts",
     "bot:built": "node dist/bot/index.js",
     "build": "tsc",
