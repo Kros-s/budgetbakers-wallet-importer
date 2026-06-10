@@ -10,6 +10,7 @@ import { loadBotConfig } from "./bot/config.js";
 import { registerHandlers } from "./bot/handlers.js";
 import { startWebhookServer } from "./webhook/server.js";
 import { buildDailySummary, scheduleDailyAt } from "./webhook/daily-tracker.js";
+import { startImapPoller } from "./imap/poller.js";
 
 function loadEnvLocalIntoProcess(): void {
   const envPath = path.resolve(".env.local");
@@ -52,6 +53,7 @@ async function main() {
   // Webhook server — shares bot, couch, lookup with the Telegram bot
   const notificationChatId = [...config.allowedChatIds][0];
   startWebhookServer({ bot, config, couch, userId: credentials.userId, lookup, notificationChatId });
+  startImapPoller({ bot, config, couch, userId: credentials.userId, lookup, notificationChatId });
 
   // Daily summary at 21:00 local time
   scheduleDailyAt(21, async () => {
