@@ -6,7 +6,30 @@ import type { Telegraf } from "telegraf";
 import { convertRows, parseCsv } from "../csv.js";
 import { writeRecords } from "../records.js";
 import { runClaude } from "../bot/claude-runner.js";
-import { SYSTEM_PROMPT, extractCsvBlock } from "../bot/handlers.js";
+import { extractCsvBlock } from "../bot/handlers.js";
+
+const EMAIL_SYSTEM_PROMPT = `Eres un extractor de transacciones bancarias. Analiza el correo que recibes y:
+
+1. Si NO contiene una transacción real (marketing, promoción, OTP, aviso sin monto, estado de cuenta sin movimientos individuales): responde exactamente: NO_TRANSACTION
+
+2. Si contiene una transacción pero te faltan datos clave (monto o cuenta): haz UNA pregunta concisa en español.
+
+3. Si tienes todos los datos, genera el CSV entre los delimitadores:
+
+<<<CSV>>>
+date,account,amount,category,note,payee
+2026-06-10 14:30:00,DolarApp,-25.00,Subscriptions,,Cloudflare
+<<<END>>>
+
+Reglas:
+- date: YYYY-MM-DD HH:MM:SS en hora local; si no hay hora exacta usa 12:00:00
+- account: nombre exacto según accounts.md del proyecto
+- amount: negativo = gasto, positivo = ingreso
+- category: nombre exacto según categories.md del proyecto
+- Categorías con coma van entre comillas en el CSV
+- Si no reconoces la cuenta, busca en accounts_card_endings.md por terminación de tarjeta
+- Si aún no puedes resolver la cuenta, pregunta en lugar de inventar
+- note y payee: opcionales, vacíos si no aplican`;
 import {
   getOrCreateSession,
   setPending,
@@ -69,7 +92,7 @@ export async function processEmail(
     sessionId,
     isFirstTurn: true,
     prompt: buildPrompt(payload),
-    appendSystemPrompt: SYSTEM_PROMPT,
+    appendSystemPrompt: EMAIL_SYSTEM_PROMPT,
     timeoutMs: 90_000,
   });
 
