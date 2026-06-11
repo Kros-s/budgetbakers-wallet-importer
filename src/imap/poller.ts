@@ -4,6 +4,7 @@ import PostalMime from "postal-mime";
 
 import { processEmail } from "../webhook/email-processor.js";
 import type { EmailDeps } from "../webhook/email-processor.js";
+import { getProcessed, saveProcessed } from "./processed-store.js";
 
 function htmlToText(html: string): string {
   return html
@@ -39,22 +40,35 @@ interface FetchedMessage {
   envelope: MessageEnvelopeObject;
 }
 
+interface FetchResult {
+  messages: FetchedMessage[];
+  uidValidity: bigint;
+}
+
 // Phase 1: open connection, download everything, close immediately.
-async function fetchMessages(folder: string, onlyUnseen: boolean): Promise<FetchedMessage[]> {
+async function fetchMessages(folder: string, skipStore: boolean): Promise<FetchResult> {
   const client = buildClient();
   await client.connect();
   const messages: FetchedMessage[] = [];
+  let uidValidity = 0n;
   try {
     const lock = await client.getMailboxLock(folder);
     try {
+      if (client.mailbox) uidValidity = (client.mailbox as { uidValidity: bigint }).uidValidity;
+
       const lookbackDays = Number(process.env.IMAP_LOOKBACK_DAYS ?? 3);
       const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
-      const uids = await client.search({ ...(onlyUnseen && { seen: false }), since }, { uid: true });
-      if (!uids || uids.length === 0) return messages;
+      const uids = await client.search({ since }, { uid: true });
+      if (!uids || uids.length === 0) return { messages, uidValidity };
 
-      console.log(`[imap] ${uids.length} message(s) to process`);
+      // Filter already-processed UIDs (unless this is the archive one-shot)
+      const processed = skipStore ? new Set<number>() : getProcessed(folder, uidValidity);
+      const toFetch = uids.filter((uid) => !processed.has(uid));
+      if (toFetch.length === 0) return { messages, uidValidity };
 
-      for await (const msg of client.fetch(uids, { envelope: true, source: true }, { uid: true })) {
+      console.log(`[imap] ${toFetch.length} new message(s) to process`);
+
+      for await (const msg of client.fetch(toFetch, { envelope: true, source: true }, { uid: true })) {
         if (msg.source && msg.envelope) {
           messages.push({ uid: msg.uid, source: msg.source, envelope: msg.envelope });
         }
@@ -65,34 +79,15 @@ async function fetchMessages(folder: string, onlyUnseen: boolean): Promise<Fetch
   } finally {
     await client.logout();
   }
-  return messages;
+  return { messages, uidValidity };
 }
 
-// Phase 3: reconnect just to mark UIDs as seen.
-async function markSeen(folder: string, uids: number[]): Promise<void> {
-  if (uids.length === 0) return;
-  const client = buildClient();
-  await client.connect();
-  try {
-    const lock = await client.getMailboxLock(folder);
-    try {
-      await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
-    } finally {
-      lock.release();
-    }
-  } finally {
-    await client.logout();
-  }
-}
-
-export async function pollOnce(deps: EmailDeps, folder = "INBOX", onlyUnseen = true): Promise<void> {
+export async function pollOnce(deps: EmailDeps, folder = "INBOX", skipStore = false): Promise<void> {
   const userEmail = process.env.ICLOUD_EMAIL!;
 
-  // Phase 1: fetch all messages quickly, then close connection
-  const messages = await fetchMessages(folder, onlyUnseen);
+  // Phase 1: fetch new messages quickly, then close connection
+  const { messages, uidValidity } = await fetchMessages(folder, skipStore);
   if (messages.length === 0) return;
-
-  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   // Phase 2: process through Claude (slow — no IMAP connection open)
   const processedUids: number[] = [];
@@ -120,9 +115,9 @@ export async function pollOnce(deps: EmailDeps, folder = "INBOX", onlyUnseen = t
     }
   }
 
-  // Phase 3: mark as seen (only for INBOX poller — archive emails are already seen)
-  if (onlyUnseen) {
-    await markSeen(folder, processedUids);
+  // Phase 3: save processed UIDs so next poll skips them (emails stay unread)
+  if (!skipStore && processedUids.length > 0) {
+    saveProcessed(folder, uidValidity, processedUids);
   }
 }
 

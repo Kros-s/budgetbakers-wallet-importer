@@ -45,7 +45,7 @@ async function main() {
   await pollOnce(
     { bot, config, couch, userId: credentials.userId, lookup, notificationChatId },
     folder,
-    false  // include already-read emails (archived emails are always marked seen)
+    true  // skipStore: process everything regardless of prior runs
   );
 
   console.log("\nDone.");
