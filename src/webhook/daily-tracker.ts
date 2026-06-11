@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 export interface DailyEntry {
   ts: string;          // ISO-8601
   account: string;     // nombre legible
@@ -8,31 +11,53 @@ export interface DailyEntry {
   status: "written" | "pending";
 }
 
-let entries: DailyEntry[] = [];
-let currentDay = todayStr();
+const STORE_PATH = path.resolve("data/bot/daily-tracker.json");
+
+interface Store {
+  day: string;
+  entries: DailyEntry[];
+}
 
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function loadStore(): Store {
+  try {
+    const raw = JSON.parse(fs.readFileSync(STORE_PATH, "utf8")) as Store;
+    if (raw.day === todayStr()) return raw;
+  } catch {
+    // file missing or corrupt — start fresh
+  }
+  return { day: todayStr(), entries: [] };
+}
+
+function saveStore(store: Store): void {
+  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
+  fs.writeFileSync(STORE_PATH, JSON.stringify(store));
+}
+
+let store = loadStore();
+
 function checkReset(): void {
   const today = todayStr();
-  if (today !== currentDay) {
-    entries = [];
-    currentDay = today;
+  if (store.day !== today) {
+    store = { day: today, entries: [] };
+    saveStore(store);
   }
 }
 
 export function trackTransaction(entry: DailyEntry): void {
   checkReset();
-  entries.push(entry);
+  store.entries.push(entry);
+  saveStore(store);
 }
 
 /** Returns the matching entry if a likely duplicate exists, null otherwise. */
 export function findDuplicate(accountId: string, amount: number): DailyEntry | null {
   checkReset();
   return (
-    entries.find(
+    store.entries.find(
       (e) => e.accountId === accountId && Math.abs(e.amount - amount) < 0.01
     ) ?? null
   );
@@ -41,15 +66,15 @@ export function findDuplicate(accountId: string, amount: number): DailyEntry | n
 /** Returns all entries for today as JSONL — one compact JSON object per line. */
 export function getDailyLog(): string {
   checkReset();
-  return entries.map((e) => JSON.stringify(e)).join("\n");
+  return store.entries.map((e) => JSON.stringify(e)).join("\n");
 }
 
 /** Builds a human-readable Telegram summary for the day. */
 export function buildDailySummary(date: string): string {
   checkReset();
-  if (entries.length === 0) return `📊 Sin transacciones registradas el ${date}.`;
+  if (store.entries.length === 0) return `📊 Sin transacciones registradas el ${date}.`;
 
-  const lines = entries.map((e) => {
+  const lines = store.entries.map((e) => {
     const sign = e.amount < 0 ? "💸" : "💰";
     const amt = Math.abs(e.amount).toFixed(2);
     const time = e.ts.slice(11, 16);
@@ -57,8 +82,8 @@ export function buildDailySummary(date: string): string {
     return `${sign} ${time} | ${e.account} | $${amt} | ${e.category}${e.payee ? ` | ${e.payee}` : ""}${tag}`;
   });
 
-  const expenses = entries.filter((e) => e.amount < 0).reduce((s, e) => s + e.amount, 0);
-  const income = entries.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0);
+  const expenses = store.entries.filter((e) => e.amount < 0).reduce((s, e) => s + e.amount, 0);
+  const income = store.entries.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0);
 
   const totals: string[] = [];
   if (expenses < 0) totals.push(`💸 Gastos: -$${Math.abs(expenses).toFixed(2)}`);
@@ -80,7 +105,7 @@ export function scheduleDailyAt(hour: number, callback: () => void): void {
   function arm(): void {
     setTimeout(() => {
       callback();
-      arm(); // reschedule for next day
+      arm();
     }, msUntilNextFiring());
   }
 
