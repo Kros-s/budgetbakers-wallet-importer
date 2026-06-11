@@ -11,8 +11,6 @@ export interface DailyEntry {
   status: "written" | "pending";
 }
 
-const STORE_PATH = path.resolve("data/bot/daily-tracker.json");
-
 interface Store {
   day: string;
   entries: DailyEntry[];
@@ -22,19 +20,24 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function storePath(day: string): string {
+  return path.resolve(`data/bot/daily-tracker-${day}.json`);
+}
+
 function loadStore(): Store {
+  const day = todayStr();
   try {
-    const raw = JSON.parse(fs.readFileSync(STORE_PATH, "utf8")) as Store;
-    if (raw.day === todayStr()) return raw;
+    return JSON.parse(fs.readFileSync(storePath(day), "utf8")) as Store;
   } catch {
     // file missing or corrupt — start fresh
   }
-  return { day: todayStr(), entries: [] };
+  return { day, entries: [] };
 }
 
 function saveStore(store: Store): void {
-  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store));
+  const p = storePath(store.day);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(store));
 }
 
 let store = loadStore();
