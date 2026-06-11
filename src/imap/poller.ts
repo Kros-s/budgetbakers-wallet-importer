@@ -82,7 +82,12 @@ async function fetchMessages(folder: string, skipStore: boolean): Promise<FetchR
   return { messages, uidValidity };
 }
 
-export async function pollOnce(deps: EmailDeps, folder = "INBOX", skipStore = false): Promise<void> {
+export async function pollOnce(
+  deps: EmailDeps,
+  folder = "INBOX",
+  skipStore = false,
+  afterEach?: (status: string, total: number, current: number) => Promise<void>
+): Promise<void> {
   const userEmail = process.env.ICLOUD_EMAIL!;
 
   // Phase 1: fetch new messages quickly, then close connection
@@ -91,7 +96,8 @@ export async function pollOnce(deps: EmailDeps, folder = "INBOX", skipStore = fa
 
   // Phase 2: process through Claude (slow — no IMAP connection open)
   const processedUids: number[] = [];
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     try {
       const parsed = await PostalMime.parse(msg.source);
       const text = parsed.text?.trim() || (parsed.html ? htmlToText(parsed.html) : "");
@@ -107,8 +113,10 @@ export async function pollOnce(deps: EmailDeps, folder = "INBOX", skipStore = fa
       const subject = msg.envelope.subject ?? "";
 
       console.log(`[imap] uid=${msg.uid} from=${from} subject="${subject}"`);
-      await processEmail(deps, { from, subject, text });
+      const result = await processEmail(deps, { from, subject, text });
       processedUids.push(msg.uid);
+
+      if (afterEach) await afterEach(result.status, messages.length, i + 1);
     } catch (err) {
       console.error(`[imap] uid=${msg.uid} error:`, err instanceof Error ? err.message : err);
       processedUids.push(msg.uid);
