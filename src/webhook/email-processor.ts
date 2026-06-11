@@ -114,7 +114,7 @@ export async function processEmail(
     session.turnsSent = 1;
     await bot.telegram.sendMessage(
       notificationChatId,
-      `📧 *Correo de ${payload.from}*\n\n${responseText}`,
+      `📧 *Correo de ${payload.from}*\n\n${responseText}\n\n_Responde con los datos o escribe *cancelar* para ignorar._`,
       { parse_mode: "Markdown" }
     );
     return { status: "clarification", written: 0, costUsd: result.costUsd };
