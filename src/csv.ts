@@ -90,6 +90,135 @@ function isTransferCategoryAlias(category: string): boolean {
 }
 
 /**
+ * Normalizes a name for tolerant matching: lowercase, strip accents, collapse
+ * any run of non-alphanumeric characters to a single space, trim.
+ * e.g. "Restaurant, fast-food" and "Restaurant fast food" both become
+ * "restaurant fast food".
+ */
+function normalizeName(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** A tolerant lookup index: normalized key → canonical name + id, or "ambiguous". */
+interface ToleranceEntry {
+  canonicalName: string;
+  id: string;
+}
+type ToleranceIndex = Map<string, ToleranceEntry | "ambiguous">;
+
+/** Per-`maps` cache of tolerant indexes, keyed by the source Record so we don't rebuild per call. */
+const toleranceIndexCache = new WeakMap<Record<string, string>, ToleranceIndex>();
+
+/** Builds (or reuses the cached) normalized index for a name→id map. */
+function getToleranceIndex(source: Record<string, string>): ToleranceIndex {
+  const cached = toleranceIndexCache.get(source);
+  if (cached) return cached;
+
+  const index: ToleranceIndex = new Map();
+  for (const [name, id] of Object.entries(source)) {
+    const key = normalizeName(name);
+    const existing = index.get(key);
+    if (existing === undefined) {
+      index.set(key, { canonicalName: name, id });
+    } else if (existing === "ambiguous") {
+      // already marked ambiguous, nothing to do
+    } else if (existing.canonicalName !== name) {
+      // two distinct names collide when normalized — don't guess, mark ambiguous
+      index.set(key, "ambiguous");
+    }
+  }
+
+  toleranceIndexCache.set(source, index);
+  return index;
+}
+
+/**
+ * Resolves `name` against `source` first by exact match, then — if that
+ * fails — by normalized match (accents/case/punctuation-insensitive).
+ * Returns the canonical name actually matched (so callers can look up
+ * related maps, e.g. `accountCurrencies`, using the same key) plus the id.
+ */
+function resolveTolerant(
+  name: string,
+  source: Record<string, string>,
+): { canonicalName: string; id: string } | undefined {
+  const exact = source[name];
+  if (exact) return { canonicalName: name, id: exact };
+
+  const index = getToleranceIndex(source);
+  const entry = index.get(normalizeName(name));
+  if (entry === undefined || entry === "ambiguous") return undefined;
+  return entry;
+}
+
+/**
+ * Returns up to `limit` candidate names from `source` that look close to
+ * `name` — same normalized prefix, or a small edit distance. Cheap, no deps.
+ */
+function suggestCandidates(name: string, source: Record<string, string>, limit = 3): string[] {
+  const target = normalizeName(name);
+  if (!target) return [];
+
+  // Multi-word category/account names (e.g. "restaurant fast food") are
+  // compared word-by-word too, so a typo like "Restarant" still gets close
+  // to the "restaurant" token even though the full strings differ a lot.
+  const threshold = Math.max(2, Math.ceil(target.length * 0.34));
+
+  const candidates = Object.keys(source);
+  const scored = candidates
+    .map((candidate) => {
+      const normalizedCandidate = normalizeName(candidate);
+      const words = normalizedCandidate.split(" ");
+      const samePrefix = normalizedCandidate.startsWith(target)
+        || target.startsWith(normalizedCandidate)
+        || words.some((w) => w.startsWith(target) || target.startsWith(w));
+      const distance = Math.min(
+        levenshtein(target, normalizedCandidate),
+        ...words.map((w) => levenshtein(target, w)),
+      );
+      return { candidate, samePrefix, distance };
+    })
+    .filter(({ samePrefix, distance }) => samePrefix || distance <= threshold)
+    .sort((a, b) => {
+      if (a.samePrefix !== b.samePrefix) return a.samePrefix ? -1 : 1;
+      return a.distance - b.distance;
+    });
+
+  return scored.slice(0, limit).map(({ candidate }) => candidate);
+}
+
+/** Small, dependency-free Levenshtein distance for close-match suggestions. */
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  let prevRow = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const currRow = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      currRow.push(Math.min(currRow[j - 1] + 1, prevRow[j] + 1, prevRow[j - 1] + cost));
+    }
+    prevRow = currRow;
+  }
+  return prevRow[n];
+}
+
+/** Formats a "did you mean" suffix from candidate names, or "" if none. */
+function suggestionSuffix(candidates: string[]): string {
+  if (candidates.length === 0) return "";
+  const quoted = candidates.map((c) => `"${c}"`).join(", ");
+  return ` — did you mean ${quoted}?`;
+}
+
+/**
  * Parses the custom importer CSV string into raw row objects.
  * Strips the UTF-8 BOM and skips blank lines.
  */
@@ -168,9 +297,21 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
     if (!row.date?.trim() || !row.account?.trim()) continue;
 
     // ── Resolve CouchDB ids ─────────────────────────────────────────────────
-    const accountId = maps.accounts[row.account];
-    const currencyId = maps.accountCurrencies[row.account];
+    // Account: exact match, then normalized (accent/case/punctuation-insensitive).
+    // The canonical name the account resolved to is reused to look up its
+    // currency, so a tolerant account match still finds the right currency.
+    let accountId = maps.accounts[row.account];
+    let accountCanonicalName = row.account;
+    if (!accountId) {
+      const resolved = resolveTolerant(row.account, maps.accounts);
+      if (resolved) {
+        accountId = resolved.id;
+        accountCanonicalName = resolved.canonicalName;
+      }
+    }
+    const currencyId = accountId ? maps.accountCurrencies[accountCanonicalName] : undefined;
 
+    // Category: exact match, then transfer alias, then normalized match.
     const rawCategory = row.category?.trim() || "";
     let categoryId = maps.categories[rawCategory];
 
@@ -178,8 +319,14 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
       categoryId = maps.transferCategoryId;
     }
 
+    if (!categoryId) {
+      const resolved = resolveTolerant(rawCategory, maps.categories);
+      if (resolved) categoryId = resolved.id;
+    }
+
     if (!accountId) {
-      skipped.push({ row, reason: `Unknown account: "${row.account}"` });
+      const suggestions = suggestCandidates(row.account, maps.accounts);
+      skipped.push({ row, reason: `Unknown account: "${row.account}"${suggestionSuffix(suggestions)}` });
       continue;
     }
     if (!currencyId) {
@@ -187,7 +334,9 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
       continue;
     }
     if (!categoryId) {
-      skipped.push({ row, reason: `Unknown category: "${row.category}" — check app for exact name` });
+      const suggestions = suggestCandidates(rawCategory, maps.categories);
+      const suffix = suggestions.length > 0 ? suggestionSuffix(suggestions) : " — check app for exact name";
+      skipped.push({ row, reason: `Unknown category: "${row.category}"${suffix}` });
       continue;
     }
 
@@ -220,9 +369,15 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
     const rawLabel = row.label?.trim() || "";
     let labelIds: string[] | undefined;
     if (rawLabel) {
-      const labelId = maps.labels[rawLabel];
+      let labelId = maps.labels[rawLabel];
       if (!labelId) {
-        skipped.push({ row, reason: `Unknown label: "${rawLabel}" — check app for exact name` });
+        const resolved = resolveTolerant(rawLabel, maps.labels);
+        if (resolved) labelId = resolved.id;
+      }
+      if (!labelId) {
+        const suggestions = suggestCandidates(rawLabel, maps.labels);
+        const suffix = suggestions.length > 0 ? suggestionSuffix(suggestions) : " — check app for exact name";
+        skipped.push({ row, reason: `Unknown label: "${rawLabel}"${suffix}` });
         continue;
       }
       labelIds = [labelId];
