@@ -40,6 +40,12 @@ import {
   clearAllPending,
   type BotSession,
 } from "./session.js";
+import { trackTransaction } from "../webhook/daily-tracker.js";
+import {
+  takeClarification,
+  type ClarificationEntry,
+} from "../webhook/clarification-store.js";
+import { EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
 
 export interface HandlerDeps {
   bot: Telegraf;
@@ -116,11 +122,23 @@ async function sendLong(ctx: Context, text: string): Promise<void> {
   }
 }
 
+function buildClarificationPrompt(c: ClarificationEntry, userReply: string): string {
+  const body = c.emailText.length > 3000 ? c.emailText.slice(0, 3000) + "\n…(truncado)" : c.emailText;
+  return (
+    `Contexto: Se analizó el siguiente correo bancario:\n\n` +
+    `De: ${c.emailFrom}\nAsunto: ${c.emailSubject}\n---\n${body}\n---\n\n` +
+    `Tu pregunta anterior fue: "${c.claudeQuestion}"\n\n` +
+    `El usuario respondió: "${userReply}"\n\n` +
+    `Con esta información, propón el CSV. Si aún falta algo, haz una pregunta concisa.`
+  );
+}
+
 async function processUserTurn(
   deps: HandlerDeps,
   ctx: Context,
   session: BotSession,
-  prompt: string
+  prompt: string,
+  systemPrompt: string = SYSTEM_PROMPT
 ): Promise<void> {
   const { config, log } = deps;
   const isFirstTurn = session.turnsSent === 0;
@@ -132,7 +150,7 @@ async function processUserTurn(
     sessionId: session.claudeSessionId,
     isFirstTurn,
     prompt,
-    appendSystemPrompt: SYSTEM_PROMPT,
+    appendSystemPrompt: systemPrompt,
     disallowedTools: [
       "Bash(node*)",
       "Bash(npm*)",
@@ -267,6 +285,22 @@ async function commitPending(
 
   const ok = results.filter((r) => r.ok).length;
   const fail = results.length - ok;
+
+  const now = new Date().toISOString();
+  records.forEach((rec, i) => {
+    if (results[i]?.ok) {
+      const row = originalRows[i];
+      trackTransaction({
+        ts: now,
+        account: row.account,
+        accountId: rec.accountId,
+        amount: parseFloat(row.amount),
+        category: row.category,
+        payee: row.payee ?? "",
+        status: "written",
+      });
+    }
+  });
 
   deps.log("Bot import committed", {
     chatId: session.chatId,
@@ -474,12 +508,10 @@ export function registerHandlers(deps: HandlerDeps): void {
   bot.on(message("text"), async (ctx) => {
     const text = ctx.message.text.trim();
     const session = getOrCreateSession(ctx.chat.id);
+    const replyToId = ctx.message.reply_to_message?.message_id;
 
     if (session.pendingQueue.length > 0) {
       const word = text.toLowerCase();
-      // If the user replied to a specific proposal message, target that entry.
-      const replyToId = ctx.message.reply_to_message?.message_id;
-
       if (CONFIRM_WORDS.has(word)) {
         await commitPending(deps, ctx, session, replyToId);
         return;
@@ -493,6 +525,16 @@ export function registerHandlers(deps: HandlerDeps): void {
     }
 
     try {
+      // Only resolve a clarification via explicit reply-to — never auto-consume free text.
+      const clarification = replyToId ? takeClarification(replyToId) : null;
+
+      if (clarification) {
+        await ctx.reply(`📧 Procesando tu respuesta sobre el correo de _${clarification.emailFrom}_…`, { parse_mode: "Markdown" });
+        const freshSession = resetSession(ctx.chat.id);
+        await processUserTurn(deps, ctx, freshSession, buildClarificationPrompt(clarification, text), EMAIL_SYSTEM_PROMPT);
+        return;
+      }
+
       await processUserTurn(deps, ctx, session, text);
     } catch (err) {
       log.error("Text handler failed", {

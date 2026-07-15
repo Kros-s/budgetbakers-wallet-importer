@@ -175,7 +175,7 @@ export function buildLookupMapsFromData(data: LookupData): LookupMaps {
 
   const labelMap: Record<string, string> = {};
   for (const l of data.labels) {
-    labelMap[l.name] = l._id;  // "Sentra" → "-HashTag_<uuid>"
+    labelMap[l.name.trim()] = l._id;  // trim: some labels have trailing spaces in Wallet
   }
 
   // The transfer category is looked up by name at runtime — no hardcoding.

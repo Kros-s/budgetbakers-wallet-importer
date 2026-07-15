@@ -24,4 +24,4 @@ export PATH="$HOME/.local/bin:$PATH"
 
 mkdir -p "$REPO_ROOT/data/bot"
 
-exec node "$REPO_ROOT/dist/bot/index.js"
+exec node "$REPO_ROOT/dist/main.js"

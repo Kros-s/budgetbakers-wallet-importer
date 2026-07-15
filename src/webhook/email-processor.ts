@@ -8,7 +8,7 @@ import { writeRecords } from "../records.js";
 import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 
-const EMAIL_SYSTEM_PROMPT = `Eres un extractor de transacciones bancarias. Analiza el correo que recibes y:
+export const EMAIL_SYSTEM_PROMPT = `Eres un extractor de transacciones bancarias. Analiza el correo que recibes y:
 
 1. Si NO contiene una transacción real (marketing, promoción, OTP, aviso sin monto, estado de cuenta sin movimientos individuales): responde exactamente: NO_TRANSACTION
 
@@ -23,18 +23,33 @@ date,account,amount,category,note,payee
 
 Reglas:
 - date: YYYY-MM-DD HH:MM:SS en hora local; si no hay hora exacta usa 12:00:00
-- account: nombre exacto según accounts.md del proyecto
 - amount: negativo = gasto, positivo = ingreso
-- category: nombre exacto según categories.md del proyecto
 - Categorías con coma van entre comillas en el CSV
-- Si no reconoces la cuenta, busca en accounts_card_endings.md por terminación de tarjeta
-- Si aún no puedes resolver la cuenta, pregunta en lugar de inventar
-- note y payee: opcionales, vacíos si no aplican`;
+- Si no reconoces la cuenta por terminación de tarjeta, pregunta en lugar de inventar
+- note y payee: opcionales, vacíos si no aplican
+- TRANSFERENCIAS AMBIGUAS: Si el correo muestra una transferencia SPEI, pago interbancario o "pago a tercero" y el destinatario NO es claramente una de las cuentas del usuario: pregunta "¿Es transferencia entre tus cuentas o un pago a alguien/servicio? Si es pago, ¿qué categoría corresponde?". Usa "Transfer, withdraw" SOLO cuando estés seguro de que es un movimiento entre las cuentas propias del usuario (p.ej. pago de tarjeta de crédito propia, traspaso a su cuenta de ahorro).
+
+Cuentas disponibles (usa el nombre exacto):
+Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest
+Nota: "Banorte débito" = débito ****5933; "Banorte" = crédito ****4033; "Platinum Credit Card" = AmEx Platinum
+
+Categorías disponibles (usa el nombre exacto):
+Groceries, "Restaurant, fast-food", "Bar, cafe", "Food & Drinks", Candy, Despensa,
+"Health care, doctor", "Drug-store, chemist", "Health and beauty", "Wellness, beauty",
+"Public transport", Taxi, Fuel, Transportation, "Long distance", Parking, Vehicle, "Vehicle maintenance", "Vehicle insurance",
+Rent, Mortgage, Housing, "Home, garden", "Maintenance, repairs", "Energy, utilities", Services, Rentals, "Property insurance",
+Shopping, "Clothes & shoes", "Electronics, accessories", "Jewels, accessories", "Stationery, tools",
+"Free time", "Culture, sport events", "Active sport, fitness", "TV, Streaming", Hobbies, "Books, audio, subscriptions", "Holiday, trips, hotels", "Life events", "Life & Entertainment", "Alcohol, tobacco", "Software, apps, games",
+Kids, "Pets, animals", "Child Support",
+"Transfer, withdraw", "Financial expenses", "Financial investments", Investments, Realty, "Interests, dividends", "Loan, interests", Leasing, "Charges, Fees", Taxes, Fines, Insurances, Debts, "Checks, coupons", "Lending, renting",
+"Wage, invoices", Income, "Rental income", Sale, "Refunds (tax, purchase)", Gifts, "Lottery, gambling",
+"Phone, cell phone", Internet, "Communication, PC", "Postal services",
+"Education, development", "Business trips", Advisory, "Charity, gifts", "Gifts, joy", "Dues & grants", Tips, Others`;
 import {
-  getOrCreateSession,
   setPending,
   setPendingMessageId,
 } from "../bot/session.js";
+import { storeClarification } from "./clarification-store.js";
 import { findDuplicate, trackTransaction } from "./daily-tracker.js";
 import type { BotConfig } from "../bot/config.js";
 import type { LookupMaps } from "../types.js";
@@ -107,16 +122,21 @@ export async function processEmail(
 
   const { csv, cleanedText } = extractCsvBlock(responseText);
 
-  // Claude asked a clarifying question — hand off to bot's multi-turn session
+  // Claude asked a clarifying question — persist context to disk and notify user
   if (!csv) {
-    const session = getOrCreateSession(notificationChatId);
-    session.claudeSessionId = sessionId;
-    session.turnsSent = 1;
-    await bot.telegram.sendMessage(
+    const sent = await bot.telegram.sendMessage(
       notificationChatId,
-      `📧 *Correo de ${payload.from}*\n\n${responseText}\n\n_Responde con los datos o escribe *cancelar* para ignorar._`,
+      `📧 *Correo de ${payload.from}*\n\nAsunto: ${payload.subject}\n\n${responseText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._`,
       { parse_mode: "Markdown" }
     );
+    storeClarification(sent.message_id, {
+      chatId: notificationChatId,
+      emailFrom: payload.from,
+      emailSubject: payload.subject,
+      emailText: payload.text,
+      claudeQuestion: responseText,
+      createdAt: Date.now(),
+    });
     return { status: "clarification", written: 0, costUsd: result.costUsd };
   }
 

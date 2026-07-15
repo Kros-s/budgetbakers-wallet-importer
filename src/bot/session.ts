@@ -1,16 +1,6 @@
-/**
- * @file bot/session.ts
- * @description In-memory session state per Telegram chat id.
- *
- * Each chat keeps a stable Claude `--session-id` (a UUID generated on first
- * message) that we reuse via `--resume` to maintain conversation context
- * across messages. We also maintain a FIFO queue of pending CSV proposals
- * produced by Claude, each tied to the Telegram message_id of its proposal
- * message. Confirmation is routed to the right entry via message_id (inline
- * button or reply-to), falling back to FIFO order for plain "si" messages.
- */
-
 import { randomUUID } from "crypto";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
 import type { CsvRow } from "../csv.js";
 
 export interface PendingProposal {
@@ -32,17 +22,48 @@ export interface BotSession {
   pendingQueue: PendingProposal[];
 }
 
+// ── Disk persistence for pending proposals ──────────────────────────────────
+// Proposals are written to disk so they survive service restarts.
+
+const PENDING_PATH = join(process.cwd(), "data/bot/pending-proposals.json");
+
+type PendingStore = Record<string, PendingProposal[]>; // chatId string → proposals
+
+function loadPendingStore(): PendingStore {
+  try {
+    return JSON.parse(readFileSync(PENDING_PATH, "utf8")) as PendingStore;
+  } catch {
+    return {};
+  }
+}
+
+function flushPending(chatId: number, queue: PendingProposal[]): void {
+  mkdirSync(join(process.cwd(), "data/bot"), { recursive: true });
+  const store = loadPendingStore();
+  if (queue.length === 0) {
+    delete store[String(chatId)];
+  } else {
+    store[String(chatId)] = queue;
+  }
+  writeFileSync(PENDING_PATH, JSON.stringify(store, null, 2));
+}
+
+// ── In-memory sessions ───────────────────────────────────────────────────────
+
 const sessions = new Map<number, BotSession>();
 
 export function getOrCreateSession(chatId: number): BotSession {
   let s = sessions.get(chatId);
   if (!s) {
+    // Restore pending proposals from disk on first access after a restart.
+    const stored = loadPendingStore();
+    const pendingQueue: PendingProposal[] = stored[String(chatId)] ?? [];
     s = {
       chatId,
       claudeSessionId: randomUUID(),
       turnsSent: 0,
       lastSeenAt: Date.now(),
-      pendingQueue: [],
+      pendingQueue,
     };
     sessions.set(chatId, s);
   } else {
@@ -61,25 +82,29 @@ export function resetSession(chatId: number): BotSession {
   return getOrCreateSession(chatId);
 }
 
-/** Enqueues a new pending proposal. */
+/** Enqueues a new pending proposal and flushes to disk. */
 export function setPending(chatId: number, pending: PendingProposal): void {
   const s = getOrCreateSession(chatId);
   s.pendingQueue.push(pending);
+  flushPending(chatId, s.pendingQueue);
 }
 
 /**
  * Attaches the Telegram message_id to the most-recently-enqueued proposal
- * (the one that was just sent and whose message_id wasn't known at enqueue time).
+ * and flushes to disk.
  */
 export function setPendingMessageId(chatId: number, messageId: number): void {
   const s = sessions.get(chatId);
   if (!s || s.pendingQueue.length === 0) return;
   const last = s.pendingQueue[s.pendingQueue.length - 1];
-  if (last.messageId === undefined) last.messageId = messageId;
+  if (last.messageId === undefined) {
+    last.messageId = messageId;
+    flushPending(chatId, s.pendingQueue);
+  }
 }
 
 /**
- * Removes and returns a pending proposal.
+ * Removes and returns a pending proposal, flushing disk afterward.
  *
  * - If `messageId` is provided, finds the entry with that message_id.
  * - Otherwise takes the oldest entry (FIFO).
@@ -90,22 +115,26 @@ export function takePending(chatId: number, messageId?: number): PendingProposal
   const s = sessions.get(chatId);
   if (!s || s.pendingQueue.length === 0) return null;
 
+  let entry: PendingProposal | undefined;
   if (messageId !== undefined) {
     const idx = s.pendingQueue.findIndex((p) => p.messageId === messageId);
     if (idx === -1) return null;
-    const [entry] = s.pendingQueue.splice(idx, 1);
-    return entry;
+    [entry] = s.pendingQueue.splice(idx, 1);
+  } else {
+    entry = s.pendingQueue.shift();
   }
 
-  return s.pendingQueue.shift() ?? null;
+  if (entry) flushPending(chatId, s.pendingQueue);
+  return entry ?? null;
 }
 
-/** Removes all pending proposals and returns them. Used by /cancel. */
+/** Removes all pending proposals, flushes disk, and returns them. Used by /cancel. */
 export function clearAllPending(chatId: number): PendingProposal[] {
   const s = sessions.get(chatId);
   if (!s) return [];
   const all = [...s.pendingQueue];
   s.pendingQueue = [];
+  flushPending(chatId, []);
   return all;
 }
 
