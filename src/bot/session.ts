@@ -48,6 +48,40 @@ function flushPending(chatId: number, queue: PendingProposal[]): void {
   writeFileSync(PENDING_PATH, JSON.stringify(store, null, 2));
 }
 
+// ── Disk persistence for Claude session identity ────────────────────────────
+// claudeSessionId/turnsSent are written to disk so a service restart doesn't
+// lose the `claude --resume <uuid>` conversation (pendingQueue is persisted
+// separately above, via pending-proposals.json).
+
+const SESSIONS_PATH = join(process.cwd(), "data/bot/sessions.json");
+
+interface StoredSession {
+  claudeSessionId: string;
+  turnsSent: number;
+  lastSeenAt: number;
+}
+
+type SessionStore = Record<string, StoredSession>; // chatId string → session
+
+function loadSessionStore(): SessionStore {
+  try {
+    return JSON.parse(readFileSync(SESSIONS_PATH, "utf8")) as SessionStore;
+  } catch {
+    return {};
+  }
+}
+
+function flushSession(s: BotSession): void {
+  mkdirSync(join(process.cwd(), "data/bot"), { recursive: true });
+  const store = loadSessionStore();
+  store[String(s.chatId)] = {
+    claudeSessionId: s.claudeSessionId,
+    turnsSent: s.turnsSent,
+    lastSeenAt: s.lastSeenAt,
+  };
+  writeFileSync(SESSIONS_PATH, JSON.stringify(store, null, 2));
+}
+
 // ── In-memory sessions ───────────────────────────────────────────────────────
 
 const sessions = new Map<number, BotSession>();
@@ -58,14 +92,20 @@ export function getOrCreateSession(chatId: number): BotSession {
     // Restore pending proposals from disk on first access after a restart.
     const stored = loadPendingStore();
     const pendingQueue: PendingProposal[] = stored[String(chatId)] ?? [];
+
+    // Restore Claude session identity (uuid + turn count) so --resume picks
+    // up the same conversation instead of starting fresh after a restart.
+    const storedSession = loadSessionStore()[String(chatId)];
+
     s = {
       chatId,
-      claudeSessionId: randomUUID(),
-      turnsSent: 0,
+      claudeSessionId: storedSession?.claudeSessionId ?? randomUUID(),
+      turnsSent: storedSession?.turnsSent ?? 0,
       lastSeenAt: Date.now(),
       pendingQueue,
     };
     sessions.set(chatId, s);
+    flushSession(s);
   } else {
     s.lastSeenAt = Date.now();
   }
@@ -74,11 +114,18 @@ export function getOrCreateSession(chatId: number): BotSession {
 
 export function markTurnSent(chatId: number): void {
   const s = sessions.get(chatId);
-  if (s) s.turnsSent += 1;
+  if (s) {
+    s.turnsSent += 1;
+    flushSession(s);
+  }
 }
 
 export function resetSession(chatId: number): BotSession {
   sessions.delete(chatId);
+  const store = loadSessionStore();
+  delete store[String(chatId)];
+  mkdirSync(join(process.cwd(), "data/bot"), { recursive: true });
+  writeFileSync(SESSIONS_PATH, JSON.stringify(store, null, 2));
   return getOrCreateSession(chatId);
 }
 
