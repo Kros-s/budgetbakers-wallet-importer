@@ -7,9 +7,10 @@ import { loadDirectCredentials } from "./direct-auth.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "./couch.js";
 import { createLogger } from "./logger.js";
 import { loadBotConfig } from "./bot/config.js";
+import { acquireInstanceLock } from "./bot/instance-lock.js";
 import { registerHandlers } from "./bot/handlers.js";
 import { startWebhookServer } from "./webhook/server.js";
-import { buildDailySummary, scheduleDailyAt } from "./webhook/daily-tracker.js";
+import { buildDailySummary, hasEntriesToday, scheduleDailyAt } from "./webhook/daily-tracker.js";
 import { startImapPoller } from "./imap/poller.js";
 
 function loadEnvLocalIntoProcess(): void {
@@ -31,6 +32,10 @@ async function main() {
   console.log("\n── BudgetBakers ──\n");
 
   loadEnvLocalIntoProcess();
+
+  // Refuse to start a second instance (launchd + manual run, or a restart
+  // where the old process didn't die) — that causes duplicate Telegram sends.
+  acquireInstanceLock();
 
   const config = loadBotConfig();
   const logFilePath = path.resolve("data", "bot", `bot-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
@@ -57,6 +62,8 @@ async function main() {
 
   // Daily summary at 21:00 local time
   scheduleDailyAt(21, async () => {
+    // Skip the send entirely on a quiet day — no point notifying "no transactions".
+    if (!hasEntriesToday()) return;
     const date = new Date().toISOString().slice(0, 10);
     const summary = buildDailySummary(date);
     try {

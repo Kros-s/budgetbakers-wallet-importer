@@ -7,6 +7,7 @@ import { convertRows, parseCsv } from "../csv.js";
 import { writeRecords } from "../records.js";
 import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
+import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 
 export const EMAIL_SYSTEM_PROMPT = `Eres un extractor de transacciones bancarias. Analiza el correo que recibes y:
 
@@ -28,6 +29,7 @@ Reglas:
 - Si no reconoces la cuenta por terminación de tarjeta, pregunta en lugar de inventar
 - note y payee: opcionales, vacíos si no aplican
 - TRANSFERENCIAS AMBIGUAS: Si el correo muestra una transferencia SPEI, pago interbancario o "pago a tercero" y el destinatario NO es claramente una de las cuentas del usuario: pregunta "¿Es transferencia entre tus cuentas o un pago a alguien/servicio? Si es pago, ¿qué categoría corresponde?". Usa "Transfer, withdraw" SOLO cuando estés seguro de que es un movimiento entre las cuentas propias del usuario (p.ej. pago de tarjeta de crédito propia, traspaso a su cuenta de ahorro).
+- Para registrar una transferencia entre cuentas propias del usuario emite DOS filas CSV con la MISMA fecha/hora exacta y categoría "Transfer, withdraw": una negativa en la cuenta origen y una positiva en la cuenta destino. NUNCA emitas una sola fila con categoría Transfer (se rechaza). Para dinero que llega de fuera (no es cuenta propia), usa categoría de ingreso normal (p.ej. Others o "Wage, invoices"), no Transfer.
 
 Cuentas disponibles (usa el nombre exacto):
 Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest
@@ -44,13 +46,20 @@ Kids, "Pets, animals", "Child Support",
 "Transfer, withdraw", "Financial expenses", "Financial investments", Investments, Realty, "Interests, dividends", "Loan, interests", Leasing, "Charges, Fees", Taxes, Fines, Insurances, Debts, "Checks, coupons", "Lending, renting",
 "Wage, invoices", Income, "Rental income", Sale, "Refunds (tax, purchase)", Gifts, "Lottery, gambling",
 "Phone, cell phone", Internet, "Communication, PC", "Postal services",
-"Education, development", "Business trips", Advisory, "Charity, gifts", "Gifts, joy", "Dues & grants", Tips, Others`;
+"Education, development", "Business trips", Advisory, "Charity, gifts", "Gifts, joy", "Dues & grants", Tips, Others
+
+Si el usuario revela un hecho estable y reutilizable (de quién es una tarjeta, a qué cuenta va un cargo recurrente, categoría habitual de un comercio, o pide explícitamente "guárdalo en memoria"), emite ADEMÁS un bloque:
+<<<RULE>>>
+<regla en una línea, en español, autocontenida>
+<<<END_RULE>>>
+Emite el bloque solo para hechos nuevos que no estén ya en las reglas aprendidas.`;
 import {
   setPending,
   setPendingMessageId,
 } from "../bot/session.js";
 import { storeClarification } from "./clarification-store.js";
 import { findDuplicate, trackTransaction } from "./daily-tracker.js";
+import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "./learned-rules.js";
 import type { BotConfig } from "../bot/config.js";
 import type { LookupMaps } from "../types.js";
 
@@ -76,8 +85,12 @@ export interface ProcessResult {
 }
 
 function buildPrompt(payload: EmailPayload): string {
+  const learnedRules = getLearnedRules();
+  const rulesSection = learnedRules
+    ? `Reglas aprendidas del usuario (respétalas SIEMPRE):\n${learnedRules}\n\n`
+    : "";
   return (
-    `El usuario recibió el siguiente correo bancario. Analízalo y extrae las transacciones.\n\n` +
+    `${rulesSection}El usuario recibió el siguiente correo bancario. Analízalo y extrae las transacciones.\n\n` +
     `De: ${payload.from}\n` +
     `Asunto: ${payload.subject}\n` +
     `---\n${payload.text}\n---\n\n` +
@@ -113,8 +126,14 @@ export async function processEmail(
 
   if (!result.ok) throw new Error(`Claude error: ${result.text.slice(0, 300)}`);
 
-  const responseText = result.text.trim();
-  console.log(`[email] claude → ${responseText.slice(0, 120)}`);
+  const rawText = result.text.trim();
+  console.log(`[email] claude → ${rawText.slice(0, 120)}`);
+
+  // Extract and persist any learned-rule blocks before further parsing —
+  // they must never reach the user or the CSV extractor/parser.
+  const { rules, cleanedText: responseText } = extractRuleBlocks(rawText);
+  for (const rule of rules) appendLearnedRule(rule);
+  const ruleNote = rules.map((r) => `\n\n🧠 Regla guardada: ${r}`).join("");
 
   if (responseText === "NO_TRANSACTION") {
     return { status: "no_transaction", written: 0, costUsd: result.costUsd };
@@ -124,10 +143,10 @@ export async function processEmail(
 
   // Claude asked a clarifying question — persist context to disk and notify user
   if (!csv) {
-    const sent = await bot.telegram.sendMessage(
+    const sent = await sendSafeMessage(
+      bot.telegram,
       notificationChatId,
-      `📧 *Correo de ${payload.from}*\n\nAsunto: ${payload.subject}\n\n${responseText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._`,
-      { parse_mode: "Markdown" }
+      `📧 *Correo de ${escapeMarkdown(payload.from)}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${responseText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${ruleNote}`
     );
     storeClarification(sent.message_id, {
       chatId: notificationChatId,
@@ -149,7 +168,7 @@ export async function processEmail(
   if (skipped.length === 0 && records.length > 0) {
     const duplicates = records
       .map((rec, i) => ({ rec, row: originalRows[i] }))
-      .filter(({ rec, row }) => findDuplicate(rec.accountId, parseFloat(row.amount)) !== null);
+      .filter(({ rec, row }) => findDuplicate(rec.accountId, parseFloat(row.amount), row.payee) !== null);
 
     if (duplicates.length > 0) {
       const dupLines = duplicates.map(({ row }) => {
@@ -157,10 +176,10 @@ export async function processEmail(
         return `⚠️ $${amt} en ${row.account} (${row.category})`;
       });
       console.log(`[email] duplicate detected — skipping write`);
-      await bot.telegram.sendMessage(
+      await sendSafeMessage(
+        bot.telegram,
         notificationChatId,
-        `🔁 *Posible duplicado* — no se guardó:\n${dupLines.join("\n")}`,
-        { parse_mode: "Markdown" }
+        `🔁 *Posible duplicado* — no se guardó:\n${dupLines.join("\n")}`
       );
       return { status: "duplicate", written: 0, costUsd: result.costUsd };
     }
@@ -183,7 +202,7 @@ export async function processEmail(
       });
     }
 
-    await bot.telegram.sendMessage(notificationChatId, buildSuccessMessage(rows));
+    await bot.telegram.sendMessage(notificationChatId, `${buildSuccessMessage(rows)}${ruleNote}`);
     return { status: "written", written: records.length, costUsd: result.costUsd };
   }
 
@@ -198,16 +217,14 @@ export async function processEmail(
 
   setPending(notificationChatId, { rows, summary: cleanedText ?? "", createdAt: Date.now() });
 
-  const sent = await bot.telegram.sendMessage(
+  const sent = await sendSafeMessage(
+    bot.telegram,
     notificationChatId,
-    `📧 *Correo bancario*\n\n${preview}📋 ${rows.length} registro(s)${skippedNote}:\n\`\`\`\n${csvPreview}\n\`\`\``,
-    {
-      parse_mode: "Markdown",
-      ...Markup.inlineKeyboard([
-        Markup.button.callback("✅ Confirmar", "confirm_pending"),
-        Markup.button.callback("❌ Cancelar", "cancel_pending"),
-      ]),
-    }
+    `📧 *Correo bancario*\n\n${preview}📋 ${rows.length} registro(s)${skippedNote}:\n\`\`\`\n${csvPreview}\n\`\`\`${ruleNote}`,
+    Markup.inlineKeyboard([
+      Markup.button.callback("✅ Confirmar", "confirm_pending"),
+      Markup.button.callback("❌ Cancelar", "cancel_pending"),
+    ])
   );
 
   setPendingMessageId(notificationChatId, sent.message_id);

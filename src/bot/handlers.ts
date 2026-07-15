@@ -21,7 +21,7 @@ import { message } from "telegraf/filters";
 
 import type { AxiosInstance } from "axios";
 import type { LookupMaps } from "../types.js";
-import { convertRows, parseCsv } from "../csv.js";
+import { convertRows, parseCsv, rowsToCsv } from "../csv.js";
 import type { CsvRow } from "../csv.js";
 import { writeRecords } from "../records.js";
 import type { Logger } from "../logger.js";
@@ -43,9 +43,12 @@ import {
 import { trackTransaction } from "../webhook/daily-tracker.js";
 import {
   takeClarification,
+  storeClarification,
   type ClarificationEntry,
 } from "../webhook/clarification-store.js";
 import { EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
+import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "../webhook/learned-rules.js";
+import { escapeMarkdown, replySafe } from "./telegram-safe.js";
 
 export interface HandlerDeps {
   bot: Telegraf;
@@ -80,6 +83,23 @@ Ejemplo:
 
 Usa emojis contextuales según la categoría (🍔 comida, ⛽ gasolina, 🛒 despensa, 💊 salud, 🎬 entretenimiento, 🏠 hogar, etc.). Para ingresos usa 💰 en lugar de 💸. Al final del listado agrega el total: **Total: -$X.XX**
 
+Cuentas disponibles (usa el nombre exacto):
+Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest
+Nota: "Banorte débito" = débito ****5933; "Banorte" = crédito ****4033; "Platinum Credit Card" = AmEx Platinum
+
+Categorías disponibles (usa el nombre exacto):
+Groceries, "Restaurant, fast-food", "Bar, cafe", "Food & Drinks", Candy, Despensa,
+"Health care, doctor", "Drug-store, chemist", "Health and beauty", "Wellness, beauty",
+"Public transport", Taxi, Fuel, Transportation, "Long distance", Parking, Vehicle, "Vehicle maintenance", "Vehicle insurance",
+Rent, Mortgage, Housing, "Home, garden", "Maintenance, repairs", "Energy, utilities", Services, Rentals, "Property insurance",
+Shopping, "Clothes & shoes", "Electronics, accessories", "Jewels, accessories", "Stationery, tools",
+"Free time", "Culture, sport events", "Active sport, fitness", "TV, Streaming", Hobbies, "Books, audio, subscriptions", "Holiday, trips, hotels", "Life events", "Life & Entertainment", "Alcohol, tobacco", "Software, apps, games",
+Kids, "Pets, animals", "Child Support",
+"Transfer, withdraw", "Financial expenses", "Financial investments", Investments, Realty, "Interests, dividends", "Loan, interests", Leasing, "Charges, Fees", Taxes, Fines, Insurances, Debts, "Checks, coupons", "Lending, renting",
+"Wage, invoices", Income, "Rental income", Sale, "Refunds (tax, purchase)", Gifts, "Lottery, gambling",
+"Phone, cell phone", Internet, "Communication, PC", "Postal services",
+"Education, development", "Business trips", Advisory, "Charity, gifts", "Gifts, joy", "Dues & grants", Tips, Others
+
 REGLAS DURAS:
 - NUNCA ejecutes Bash con node, npm, pnpm, ni invoques dist/cli/index.js. El bot escribe a CouchDB después de que el usuario confirme con "si"/"confirmar".
 - NUNCA llames herramientas mcp__claude_ai_Wallet__ que escriban (esas son solo lectura, igual confirma).
@@ -89,6 +109,7 @@ REGLAS DURAS:
 - Los nombres de label deben coincidir exactamente con los de labels.md (ej. "Sentra", "Marlene", "Toll", "Comida 🥘"). Solo un label por fila.
 - Si no estás seguro de algún campo, pregunta. No inventes.
 - Mantén las respuestas concisas, este es un chat de Telegram.
+- Para registrar una transferencia entre cuentas propias del usuario emite DOS filas CSV con la MISMA fecha/hora exacta y categoría "Transfer, withdraw": una negativa en la cuenta origen y una positiva en la cuenta destino. NUNCA emitas una sola fila con categoría Transfer (se rechaza). Para dinero que llega de fuera (no es cuenta propia), usa categoría de ingreso normal (p.ej. Others o "Wage, invoices"), no Transfer.
 
 El bot mostrará tu respuesta tal cual al usuario en Telegram. Si emites el bloque <<<CSV>>>, el bot lo extraerá, lo mostrará al usuario, y le pedirá confirmar antes de escribir.`;
 
@@ -124,12 +145,19 @@ async function sendLong(ctx: Context, text: string): Promise<void> {
 
 function buildClarificationPrompt(c: ClarificationEntry, userReply: string): string {
   const body = c.emailText.length > 3000 ? c.emailText.slice(0, 3000) + "\n…(truncado)" : c.emailText;
+  const learnedRules = getLearnedRules();
+  const rulesSection = learnedRules
+    ? `Reglas aprendidas del usuario (respétalas SIEMPRE):\n${learnedRules}\n\n`
+    : "";
   return (
-    `Contexto: Se analizó el siguiente correo bancario:\n\n` +
+    `${rulesSection}Contexto: Se analizó el siguiente correo bancario:\n\n` +
     `De: ${c.emailFrom}\nAsunto: ${c.emailSubject}\n---\n${body}\n---\n\n` +
     `Tu pregunta anterior fue: "${c.claudeQuestion}"\n\n` +
     `El usuario respondió: "${userReply}"\n\n` +
-    `Con esta información, propón el CSV. Si aún falta algo, haz una pregunta concisa.`
+    `Con esta información, propón el CSV. Si aún falta algo, haz una pregunta concisa.\n\n` +
+    `Si el usuario reveló un hecho estable y reutilizable (de quién es una tarjeta, a qué cuenta va un cargo recurrente, categoría habitual de un comercio, o pide explícitamente "guárdalo en memoria"), emite ADEMÁS un bloque:\n` +
+    `<<<RULE>>>\n<regla en una línea, en español, autocontenida>\n<<<END_RULE>>>\n` +
+    `Emite el bloque solo para hechos nuevos que no estén ya en las reglas aprendidas.`
   );
 }
 
@@ -186,7 +214,13 @@ async function processUserTurn(
     return;
   }
 
-  const { csv, cleanedText } = extractCsvBlock(result.text);
+  // Extract and persist any learned-rule blocks before further parsing —
+  // they must never reach the user or the CSV extractor/parser.
+  const { rules, cleanedText: dedupedText } = extractRuleBlocks(result.text);
+  for (const rule of rules) appendLearnedRule(rule);
+  const ruleNote = rules.map((r) => `\n\n🧠 Regla guardada: ${r}`).join("");
+
+  const { csv, cleanedText } = extractCsvBlock(dedupedText);
 
   if (csv) {
     let rows: CsvRow[];
@@ -218,7 +252,7 @@ async function processUserTurn(
     const queueBadge = queueLen > 1 ? ` (${queueLen} pendientes)` : "";
     const preview = cleanedText ? `${cleanedText}\n\n` : "";
     const csvPreview = csv.length > 1500 ? csv.slice(0, 1500) + "\n…(truncado)" : csv;
-    const body = `${preview}📋 Propuesta${queueBadge} — ${rows.length} registro${rows.length === 1 ? "" : "s"}:\n\`\`\`\n${csvPreview}\n\`\`\``;
+    const body = `${preview}📋 Propuesta${queueBadge} — ${rows.length} registro${rows.length === 1 ? "" : "s"}:\n\`\`\`\n${csvPreview}\n\`\`\`${ruleNote}`;
 
     const sent = await ctx.reply(
       body,
@@ -231,7 +265,7 @@ async function processUserTurn(
     return;
   }
 
-  await sendLong(ctx, cleanedText || "(sin respuesta)");
+  await sendLong(ctx, (cleanedText || "(sin respuesta)") + ruleNote);
 }
 
 async function commitPending(
@@ -259,11 +293,13 @@ async function commitPending(
     await ctx.reply(
       `⚠️ No quedaron registros válidos. ${skipped.length} descartados:\n${skippedReasons}`
     );
+    const originalCsv = rowsToCsv(pending.rows);
     await processUserTurn(
       deps, ctx, session,
       `El CSV que propuse falló validación al intentar importarlo. ` +
       `${skipped.length} registro(s) descartados:\n${skippedReasons}\n\n` +
-      `Por favor corrige y propón un nuevo CSV.`
+      `Estas eran las filas originales:\n${originalCsv}\n` +
+      `Corrige SOLO los campos rechazados y re-emite el bloque <<<CSV>>> completo con los mismos datos.`
     );
     return;
   }
@@ -317,10 +353,12 @@ async function commitPending(
   await ctx.reply(msg);
 
   if (skipped.length > 0) {
+    const originalCsv = rowsToCsv(skipped.map((s) => s.row));
     await processUserTurn(
       deps, ctx, session,
       `${skipped.length} registro(s) no pudieron importarse por errores de validación:\n${skippedReasons}\n\n` +
-      `Por favor corrígelos y propón un nuevo CSV solo para los registros fallidos.`
+      `Estas eran las filas originales:\n${originalCsv}\n` +
+      `Corrige SOLO los campos rechazados y re-emite el bloque <<<CSV>>> completo con los mismos datos.`
     );
   }
 }
@@ -524,17 +562,29 @@ export function registerHandlers(deps: HandlerDeps): void {
       // Falls through: user is amending — let Claude refine it.
     }
 
-    try {
-      // Only resolve a clarification via explicit reply-to — never auto-consume free text.
-      const clarification = replyToId ? takeClarification(replyToId) : null;
+    // Only resolve a clarification via explicit reply-to — never auto-consume free text.
+    const clarification = replyToId ? takeClarification(replyToId) : null;
 
-      if (clarification) {
-        await ctx.reply(`📧 Procesando tu respuesta sobre el correo de _${clarification.emailFrom}_…`, { parse_mode: "Markdown" });
-        const freshSession = resetSession(ctx.chat.id);
-        await processUserTurn(deps, ctx, freshSession, buildClarificationPrompt(clarification, text), EMAIL_SYSTEM_PROMPT);
-        return;
+    if (clarification) {
+      try {
+        await replySafe(ctx, `📧 Procesando tu respuesta sobre el correo de _${escapeMarkdown(clarification.emailFrom)}_…`);
+        await processUserTurn(deps, ctx, session, buildClarificationPrompt(clarification, text), EMAIL_SYSTEM_PROMPT);
+      } catch (err) {
+        // Don't let the user's reply vanish — put the clarification back so they
+        // can retry by replying to the same message.
+        storeClarification(replyToId!, clarification);
+        log.error("Clarification handling failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        await ctx.reply(
+          `❌ Error procesando tu respuesta: ${err instanceof Error ? err.message : String(err)}\n\n` +
+            `Puedes responder de nuevo al mismo mensaje para reintentar.`
+        );
       }
+      return;
+    }
 
+    try {
       await processUserTurn(deps, ctx, session, text);
     } catch (err) {
       log.error("Text handler failed", {
