@@ -60,14 +60,86 @@ export function trackTransaction(entry: DailyEntry): void {
   saveStore(store);
 }
 
-/** Returns the matching entry if a likely duplicate exists, null otherwise. */
-export function findDuplicate(accountId: string, amount: number): DailyEntry | null {
+interface PastDaysCache {
+  builtForDay: string; // "today" at the time this cache was built
+  entries: DailyEntry[]; // entries from the 2 days before builtForDay
+}
+
+let pastDaysCache: PastDaysCache | null = null;
+
+function shiftedDayStr(day: string, offsetDays: number): string {
+  const d = new Date(`${day}T00:00:00`);
+  d.setDate(d.getDate() - offsetDays);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+// Read-only lookback into the previous 2 days' files — needed to catch a
+// duplicate whose original entry was written just before midnight. Never
+// mutates those files or the in-memory `store`. Cached per current day so
+// repeated calls don't re-read from disk; the cache is rebuilt whenever the
+// current day changes.
+function loadPastDaysEntries(): DailyEntry[] {
+  const today = todayStr();
+  if (pastDaysCache && pastDaysCache.builtForDay === today) return pastDaysCache.entries;
+
+  const entries: DailyEntry[] = [];
+  for (const offset of [1, 2]) {
+    const day = shiftedDayStr(today, offset);
+    try {
+      const past = JSON.parse(fs.readFileSync(storePath(day), "utf8")) as Store;
+      entries.push(...past.entries);
+    } catch {
+      // file missing or corrupt — nothing to add for that day
+    }
+  }
+  pastDaysCache = { builtForDay: today, entries };
+  return entries;
+}
+
+function normalizePayee(payee: string): string {
+  return payee.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Returns the matching entry if a likely duplicate exists, null otherwise.
+ * Looks at today's in-memory store plus the on-disk files for the previous
+ * 2 days (read-only). An entry counts as a duplicate when:
+ *   - same accountId, AND
+ *   - |amount difference| < 0.01, AND
+ *   - written within `windowMs` of now (default 3h) — uses the entry's ts, AND
+ *   - if BOTH payees are non-empty (after trim/lowercase/space-collapse),
+ *     they must match; if either is empty, account+amount+window is enough.
+ */
+export function findDuplicate(
+  accountId: string,
+  amount: number,
+  payee?: string,
+  windowMs = 3 * 60 * 60 * 1000
+): DailyEntry | null {
   checkReset();
+  const now = Date.now();
+  const normPayee = payee ? normalizePayee(payee) : "";
+  const candidates = [...store.entries, ...loadPastDaysEntries()];
+
   return (
-    store.entries.find(
-      (e) => e.accountId === accountId && Math.abs(e.amount - amount) < 0.01
-    ) ?? null
+    candidates.find((e) => {
+      if (e.accountId !== accountId) return false;
+      if (Math.abs(e.amount - amount) >= 0.01) return false;
+      if (now - new Date(e.ts).getTime() > windowMs) return false;
+      const entryPayee = e.payee ? normalizePayee(e.payee) : "";
+      if (normPayee && entryPayee && normPayee !== entryPayee) return false;
+      return true;
+    }) ?? null
   );
+}
+
+/** True if any transaction has been tracked so far today. */
+export function hasEntriesToday(): boolean {
+  checkReset();
+  return store.entries.length > 0;
 }
 
 /** Returns all entries for today as JSONL — one compact JSON object per line. */
