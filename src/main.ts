@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import fs from "fs";
 import path from "path";
 import { Telegraf } from "telegraf";
 
+import { loadEnvLocal } from "./env.js";
 import { loadDirectCredentials } from "./direct-auth.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "./couch.js";
 import { createLogger } from "./logger.js";
@@ -13,25 +13,10 @@ import { startWebhookServer } from "./webhook/server.js";
 import { buildDailySummary, hasEntriesToday, scheduleDailyAt } from "./webhook/daily-tracker.js";
 import { startImapPoller } from "./imap/poller.js";
 
-function loadEnvLocalIntoProcess(): void {
-  const envPath = path.resolve(".env.local");
-  if (!fs.existsSync(envPath)) return;
-  const content = fs.readFileSync(envPath, "utf8");
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    const value = trimmed.slice(eqIdx + 1).trim();
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
-
 async function main() {
   console.log("\n── BudgetBakers ──\n");
 
-  loadEnvLocalIntoProcess();
+  loadEnvLocal();
 
   // Refuse to start a second instance (launchd + manual run, or a restart
   // where the old process didn't die) — that causes duplicate Telegram sends.

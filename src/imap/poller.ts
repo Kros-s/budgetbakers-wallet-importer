@@ -1,9 +1,9 @@
-import { ImapFlow } from "imapflow";
 import type { MessageEnvelopeObject } from "imapflow";
 import PostalMime from "postal-mime";
 
 import { processEmail } from "../webhook/email-processor.js";
 import type { EmailDeps } from "../webhook/email-processor.js";
+import { buildImapClient } from "./client.js";
 import { getProcessed, saveProcessed } from "./processed-store.js";
 
 function htmlToText(html: string): string {
@@ -24,16 +24,6 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-function buildClient() {
-  return new ImapFlow({
-    host: "imap.mail.me.com",
-    port: 993,
-    secure: true,
-    auth: { user: process.env.ICLOUD_EMAIL!, pass: process.env.ICLOUD_APP_PASSWORD! },
-    logger: false,
-  });
-}
-
 interface FetchedMessage {
   uid: number;
   source: Buffer;
@@ -47,7 +37,7 @@ interface FetchResult {
 
 // Phase 1: open connection, download everything, close immediately.
 async function fetchMessages(folder: string, skipStore: boolean): Promise<FetchResult> {
-  const client = buildClient();
+  const client = buildImapClient();
   await client.connect();
   const messages: FetchedMessage[] = [];
   let uidValidity = 0n;

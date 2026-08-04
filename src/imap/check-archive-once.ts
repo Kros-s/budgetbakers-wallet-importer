@@ -8,29 +8,14 @@
  *
  * Defaults to "Archive". NO_TRANSACTION emails are skipped automatically.
  */
-import path from "path";
-import fs from "fs";
 import readline from "readline";
 import { Telegraf } from "telegraf";
 
+import { loadEnvLocal } from "../env.js";
 import { loadBotConfig } from "../bot/config.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
 import { pollOnce } from "./poller.js";
-
-function loadEnv(): void {
-  const envPath = path.resolve(".env.local");
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    const value = trimmed.slice(eqIdx + 1).trim();
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
 
 function waitForEnter(message: string): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -43,7 +28,7 @@ function waitForEnter(message: string): Promise<void> {
 }
 
 async function main() {
-  loadEnv();
+  loadEnvLocal();
 
   const config = loadBotConfig();
   const credentials = loadDirectCredentials();
