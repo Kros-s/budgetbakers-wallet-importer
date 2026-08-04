@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bbw-daily</string>
+
+  <!--
+    One-shot batch importer. NO KeepAlive, NO RunAtLoad — the always-on
+    daemon design caused the 2026-05..07 crash-loop duplicates and is retired.
+    Copy to ~/Library/LaunchAgents/ (fix the repo path if cloned elsewhere):
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bbw-daily.plist
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer/scripts/launchd/run-daily.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer</string>
+
+  <!-- 20:00 = daily batch run · 10:30 = pending-approvals reminder.
+       run-daily.sh picks the mode by the hour. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>20</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>10</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer/data/bot/daily.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer/data/bot/daily.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

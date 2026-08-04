@@ -17,6 +17,8 @@
  *  - every extraction runs on an isolated fresh Haiku session (EMAIL_MODEL).
  *  - proposals are dedup-checked against real Wallet records (±48 h).
  */
+import fs from "fs";
+import path from "path";
 import readline from "readline";
 import { v4 as uuidv4 } from "uuid";
 import PostalMime from "postal-mime";
@@ -55,6 +57,7 @@ interface Args {
   undoRun?: string;
   yes: boolean;
   folder: string;
+  remind: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -71,6 +74,7 @@ function parseArgs(argv: string[]): Args {
     undoRun: get("--undo-run"),
     yes: argv.includes("--yes"),
     folder: get("--folder") ?? "INBOX",
+    remind: argv.includes("--remind"),
   };
 }
 
@@ -190,6 +194,11 @@ async function main() {
 
   if (args.undoRun) {
     await undoRun(args.undoRun, args.yes);
+    return;
+  }
+
+  if (args.remind) {
+    await remind();
     return;
   }
 
@@ -322,6 +331,56 @@ async function main() {
     console.error("No se pudo enviar el resumen a Telegram:", err instanceof Error ? err.message : err);
   }
   process.exit(counts.failed > 0 ? 1 : 0);
+}
+
+/**
+ * 10:30 reminder: summarize pending proposals/clarifications on Telegram so
+ * approvals don't rot. No IMAP, no Claude, no state changes — the original
+ * messages keep their working buttons (the interactive bot must be running
+ * to act on them). Silent when nothing is pending.
+ */
+async function remind(): Promise<void> {
+  loadEnvLocal();
+  const config = loadBotConfig();
+  const bot = new Telegraf(config.telegramBotToken);
+  const notificationChatId = [...config.allowedChatIds][0];
+
+  interface StoredClarification {
+    chatId: number; emailFrom: string; emailSubject: string; claudeQuestion: string; createdAt: number;
+  }
+  let proposals: { rows: unknown[]; summary: string; createdAt: number }[] = [];
+  let clarifications: StoredClarification[] = [];
+  try {
+    const store = JSON.parse(fs.readFileSync(path.resolve("data/bot/pending-proposals.json"), "utf8")) as Record<string, typeof proposals>;
+    proposals = Object.values(store).flat();
+  } catch { /* no pending proposals */ }
+  try {
+    const store = JSON.parse(fs.readFileSync(path.resolve("data/bot/pending-clarifications.json"), "utf8")) as Record<string, StoredClarification>;
+    // Stale entries where Claude actually concluded NO_TRANSACTION are noise.
+    clarifications = Object.values(store).filter((c) => !c.claudeQuestion.includes("NO_TRANSACTION"));
+  } catch { /* no pending clarifications */ }
+
+  if (proposals.length === 0 && clarifications.length === 0) {
+    console.log("Sin pendientes — no se envía recordatorio.");
+    return;
+  }
+
+  const lines: string[] = [`⏰ *Recordatorio* — tienes pendientes por aprobar:`];
+  if (proposals.length > 0) {
+    lines.push(`\n📋 ${proposals.length} propuesta(s) esperando ✅/❌ (busca los mensajes con botones):`);
+    for (const p of proposals.slice(0, 10)) {
+      const age = Math.round((Date.now() - p.createdAt) / 86_400_000);
+      lines.push(`• ${p.summary.slice(0, 80) || "(sin resumen)"} — hace ${age} día(s)`);
+    }
+  }
+  if (clarifications.length > 0) {
+    lines.push(`\n💬 ${clarifications.length} pregunta(s) sin responder (responde al mensaje original):`);
+    for (const c of clarifications.slice(0, 10)) {
+      lines.push(`• ${c.emailSubject.slice(0, 60)}: ${c.claudeQuestion.slice(0, 100)}`);
+    }
+  }
+  await sendSafeMessage(bot.telegram, notificationChatId, lines.join("\n"));
+  console.log(`Recordatorio enviado: ${proposals.length} propuesta(s), ${clarifications.length} aclaración(es).`);
 }
 
 /** Dry-run: fresh Haiku per email, print proposals, write NOTHING anywhere. */
