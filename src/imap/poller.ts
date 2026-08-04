@@ -6,7 +6,7 @@ import type { EmailDeps } from "../webhook/email-processor.js";
 import { buildImapClient } from "./client.js";
 import { getProcessed, saveProcessed } from "./processed-store.js";
 
-function htmlToText(html: string): string {
+export function htmlToText(html: string): string {
   return html
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")

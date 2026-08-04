@@ -62,6 +62,7 @@ interface ViewRow<TDoc> {
 
 const RECORDS_VIEW_DESIGN_ID = "_design/budgetbakers_wallet_importer";
 const RECORDS_BY_CREATED_VIEW = "records_by_reserved_created_at_v1";
+const RECORDS_BY_DATE_VIEW = "records_by_record_date_v1";
 
 const RECORDS_BY_CREATED_MAP = String.raw`function(doc) {
   if (!doc || typeof doc._id !== "string") return;
@@ -70,6 +71,15 @@ const RECORDS_BY_CREATED_MAP = String.raw`function(doc) {
   if (typeof doc.reservedCreatedAt !== "string") return;
 
   emit(doc.reservedCreatedAt, null);
+}`;
+
+const RECORDS_BY_DATE_MAP = String.raw`function(doc) {
+  if (!doc || typeof doc._id !== "string") return;
+  if (doc._id.indexOf("Record_") !== 0) return;
+  if (doc._deleted === true) return;
+  if (typeof doc.recordDate !== "string") return;
+
+  emit(doc.recordDate, null);
 }`;
 
 /** Record `type` values — both confirmed from real documents. */
@@ -187,6 +197,9 @@ function buildRecordsViewDoc(existing: DesignDoc | null): DesignDoc {
       [RECORDS_BY_CREATED_VIEW]: {
         map: RECORDS_BY_CREATED_MAP,
       },
+      [RECORDS_BY_DATE_VIEW]: {
+        map: RECORDS_BY_DATE_MAP,
+      },
     },
   };
 
@@ -206,8 +219,10 @@ async function ensureRecordsCreatedView(couch: AxiosInstance): Promise<void> {
     }
   }
 
-  const existingMap = existing?.views?.[RECORDS_BY_CREATED_VIEW]?.map;
-  const needsUpsert = !existing || existingMap !== RECORDS_BY_CREATED_MAP;
+  const needsUpsert =
+    !existing ||
+    existing.views?.[RECORDS_BY_CREATED_VIEW]?.map !== RECORDS_BY_CREATED_MAP ||
+    existing.views?.[RECORDS_BY_DATE_VIEW]?.map !== RECORDS_BY_DATE_MAP;
   if (!needsUpsert) return;
 
   const next = buildRecordsViewDoc(existing);
@@ -249,6 +264,28 @@ export async function listLastRecords(
       amount: row.doc?.amount ?? 0,
       accountId: row.doc?.accountId ?? "",
     }));
+}
+
+/**
+ * Fetches full Record documents whose `recordDate` falls in [fromIso, toIso].
+ * Used by the batch dedup gate to compare proposals against real Wallet data.
+ */
+export async function listRecordsByDateRange(
+  couch: AxiosInstance,
+  fromIso: string,
+  toIso: string
+): Promise<WalletRecord[]> {
+  await ensureRecordsCreatedView(couch);
+  const params = new URLSearchParams();
+  params.set("startkey", JSON.stringify(fromIso));
+  params.set("endkey", JSON.stringify(toIso));
+  params.set("include_docs", "true");
+  const res = await couch.get<{ rows: Array<ViewRow<WalletRecord>> }>(
+    `/${RECORDS_VIEW_DESIGN_ID}/_view/${RECORDS_BY_DATE_VIEW}?${params.toString()}`
+  );
+  return res.data.rows
+    .map((row) => row.doc)
+    .filter((doc): doc is WalletRecord => Boolean(doc));
 }
 
 export async function deleteRecords(

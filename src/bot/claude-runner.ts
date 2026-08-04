@@ -47,6 +47,8 @@ export interface ClaudeRunOptions {
   disallowedTools?: string[];
   /** Hard wall-clock cap. Default: 180s. */
   timeoutMs?: number;
+  /** Per-call model override. Takes precedence over config.claudeModel. */
+  model?: string;
 }
 
 interface ClaudeJsonEnvelope {
@@ -72,8 +74,9 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
 
   args.push("--permission-mode", config.claudePermissionMode);
 
-  if (config.claudeModel) {
-    args.push("--model", config.claudeModel);
+  const model = opts.model ?? config.claudeModel;
+  if (model) {
+    args.push("--model", model);
   }
   if (opts.appendSystemPrompt) {
     args.push("--append-system-prompt", opts.appendSystemPrompt);

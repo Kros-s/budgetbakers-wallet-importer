@@ -69,6 +69,24 @@ export interface EmailPayload {
   text: string;
 }
 
+/**
+ * Per-email extraction runs on Haiku in a fully isolated session: context
+ * overflow in long/reused sessions used to break the pipeline, and bank
+ * alerts don't need a bigger model. Statements/PDFs use Sonnet elsewhere.
+ */
+export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-4-5-20251001";
+
+/** Cap on the email body fed to the prompt — bank alerts are short; anything
+ * bigger is marketing bloat that can blow the context. */
+const MAX_BODY_CHARS = 8_000;
+
+/** Optional gate consulted before writing: return a reason string to veto the
+ * write (e.g. an equivalent record already exists in Wallet). */
+export type WalletDedupCheck = (
+  rec: { accountId: string; amount: number; type: 0 | 1; recordDate: string; payee?: string },
+  row: { amount: string; account: string; category: string; payee?: string }
+) => string | null;
+
 export interface EmailDeps {
   bot: Telegraf;
   config: BotConfig;
@@ -76,24 +94,31 @@ export interface EmailDeps {
   userId: string;
   lookup: LookupMaps;
   notificationChatId: number;
+  /** Extra duplicate gate against real Wallet records (batch runs). */
+  walletDedup?: WalletDedupCheck;
 }
 
 export interface ProcessResult {
   status: "written" | "no_transaction" | "pending_confirmation" | "duplicate" | "clarification";
   written: number;
   costUsd: number | null;
+  /** CouchDB ids of the records written (batch ledger / undo support). */
+  writtenIds?: string[];
 }
 
-function buildPrompt(payload: EmailPayload): string {
+export function buildEmailPrompt(payload: EmailPayload): string {
   const learnedRules = getLearnedRules();
   const rulesSection = learnedRules
     ? `Reglas aprendidas del usuario (respétalas SIEMPRE):\n${learnedRules}\n\n`
     : "";
+  const body = payload.text.length > MAX_BODY_CHARS
+    ? `${payload.text.slice(0, MAX_BODY_CHARS)}\n…(truncado)`
+    : payload.text;
   return (
     `${rulesSection}El usuario recibió el siguiente correo bancario. Analízalo y extrae las transacciones.\n\n` +
     `De: ${payload.from}\n` +
     `Asunto: ${payload.subject}\n` +
-    `---\n${payload.text}\n---\n\n` +
+    `---\n${body}\n---\n\n` +
     `Si contiene transacciones, propón el CSV. Si no es transaccional (marketing, OTP, aviso), responde solo: NO_TRANSACTION`
   );
 }
@@ -114,14 +139,16 @@ export async function processEmail(
   const { bot, config, couch, userId, lookup, notificationChatId } = deps;
   console.log(`[email] from=${payload.from} subject="${payload.subject}"`);
 
+  // Fresh isolated session + Haiku per email — never resumed, never shared.
   const sessionId = uuidv4();
   const result = await runClaude({
     config,
     sessionId,
     isFirstTurn: true,
-    prompt: buildPrompt(payload),
+    prompt: buildEmailPrompt(payload),
     appendSystemPrompt: EMAIL_SYSTEM_PROMPT,
     timeoutMs: 90_000,
+    model: EMAIL_MODEL,
   });
 
   if (!result.ok) throw new Error(`Claude error: ${result.text.slice(0, 300)}`);
@@ -168,7 +195,9 @@ export async function processEmail(
   if (skipped.length === 0 && records.length > 0) {
     const duplicates = records
       .map((rec, i) => ({ rec, row: originalRows[i] }))
-      .filter(({ rec, row }) => findDuplicate(rec.accountId, parseFloat(row.amount), row.payee) !== null);
+      .filter(({ rec, row }) =>
+        findDuplicate(rec.accountId, parseFloat(row.amount), row.payee) !== null ||
+        (deps.walletDedup ? deps.walletDedup(rec, row) !== null : false));
 
     if (duplicates.length > 0) {
       const dupLines = duplicates.map(({ row }) => {
@@ -184,7 +213,7 @@ export async function processEmail(
       return { status: "duplicate", written: 0, costUsd: result.costUsd };
     }
 
-    await writeRecords(couch, userId, records);
+    const bulk = await writeRecords(couch, userId, records);
     console.log(`[email] wrote ${records.length} record(s) silently`);
 
     const now = new Date().toISOString();
@@ -203,7 +232,12 @@ export async function processEmail(
     }
 
     await bot.telegram.sendMessage(notificationChatId, `${buildSuccessMessage(rows)}${ruleNote}`);
-    return { status: "written", written: records.length, costUsd: result.costUsd };
+    return {
+      status: "written",
+      written: records.length,
+      costUsd: result.costUsd,
+      writtenIds: bulk.map((b) => b.id),
+    };
   }
 
   // Fallback: send proposal to Telegram for confirmation
