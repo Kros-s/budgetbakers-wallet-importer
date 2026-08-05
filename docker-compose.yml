@@ -1,0 +1,33 @@
+# importer: one-shot batch run (scheduled by HOST cron — no daemon, no
+#           restart policy; the KeepAlive-daemon design is retired).
+# bot:      optional interactive Telegram bot (photos, tickets, /statement).
+#           The ONLY long-lived process, and it never writes without confirm.
+#
+# Host crontab on the Proxmox LXC/VM (TZ must be America/Mexico_City):
+#   0 20 * * *  cd /opt/bbw && docker compose run --rm importer
+#   30 10 * * * cd /opt/bbw && docker compose run --rm importer --remind
+
+services:
+  importer:
+    build: .
+    image: bbw-importer
+    environment:
+      - TZ=America/Mexico_City
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+    volumes:
+      - ./data:/app/data
+      - ./.env.local:/app/.env.local:ro
+    profiles: ["manual"]   # never auto-started; run via `docker compose run`
+
+  bot:
+    build: .
+    image: bbw-importer
+    entrypoint: ["node", "dist/bot/index.js"]
+    restart: unless-stopped
+    environment:
+      - TZ=America/Mexico_City
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+    volumes:
+      - ./data:/app/data
+      - ./.env.local:/app/.env.local:ro
+    profiles: ["bot"]      # start explicitly: docker compose --profile bot up -d

@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+debug
+.env.local
+.budgetbakers-session
+.budgetbakers-session.json
+Statements
+.git
+.idea
+*.log
