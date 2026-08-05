@@ -312,6 +312,10 @@ async function main() {
   const exhausted = ledger.uidsFailed.filter((f) => f.attempts >= MAX_ATTEMPTS);
   closeLedger(ledger, counts.failed === 0 ? "complete" : "failed");
 
+  // "Pendientes totales" is the user-facing truth: everything still waiting
+  // across ALL runs, not just this run's increments (which mislead after a
+  // resumed or partial run).
+  const backlog = loadPendingBacklog();
   const summary =
     `📦 *Batch ${localDayStr()}*\n` +
     `Ventana: ${from.toISOString().slice(0, 16)} → ${to.toISOString().slice(0, 16)}\n` +
@@ -319,7 +323,8 @@ async function main() {
     `🔁 Duplicados evitados: ${counts.duplicate}\n` +
     `🚫 Bloqueados (clasificador): ${blocked.length}\n` +
     `▫️ Sin transacción: ${counts.no_transaction}\n` +
-    `📋 Esperando confirmación: ${counts.pending} · 💬 Aclaraciones: ${counts.clarification}\n` +
+    `📋 Nuevas propuestas: ${counts.pending} · 💬 Nuevas aclaraciones: ${counts.clarification}\n` +
+    `📮 *Pendientes totales por responder: ${backlog.proposals.length} propuesta(s) · ${backlog.clarifications.length} aclaración(es)*\n` +
     (counts.failed > 0 ? `⚠️ Fallidos (se reintentan): ${counts.failed}\n` : "") +
     (exhausted.length > 0
       ? `❌ Agotados (${MAX_ATTEMPTS} intentos): ${exhausted.map((f) => `"${f.subject.slice(0, 40)}"`).join(", ")}`
@@ -333,6 +338,30 @@ async function main() {
   process.exit(counts.failed > 0 ? 1 : 0);
 }
 
+interface StoredClarification {
+  chatId: number; emailFrom: string; emailSubject: string; claudeQuestion: string; createdAt: number;
+}
+interface PendingBacklog {
+  proposals: { rows: unknown[]; summary: string; createdAt: number }[];
+  clarifications: StoredClarification[];
+}
+
+/** Reads EVERYTHING still awaiting the user, across all runs and sessions. */
+function loadPendingBacklog(): PendingBacklog {
+  let proposals: PendingBacklog["proposals"] = [];
+  let clarifications: StoredClarification[] = [];
+  try {
+    const store = JSON.parse(fs.readFileSync(path.resolve("data/bot/pending-proposals.json"), "utf8")) as Record<string, PendingBacklog["proposals"]>;
+    proposals = Object.values(store).flat();
+  } catch { /* no pending proposals */ }
+  try {
+    const store = JSON.parse(fs.readFileSync(path.resolve("data/bot/pending-clarifications.json"), "utf8")) as Record<string, StoredClarification>;
+    // Stale entries where Claude actually concluded NO_TRANSACTION are noise.
+    clarifications = Object.values(store).filter((c) => !c.claudeQuestion.includes("NO_TRANSACTION"));
+  } catch { /* no pending clarifications */ }
+  return { proposals, clarifications };
+}
+
 /**
  * 10:30 reminder: summarize pending proposals/clarifications on Telegram so
  * approvals don't rot. No IMAP, no Claude, no state changes — the original
@@ -344,21 +373,7 @@ async function remind(): Promise<void> {
   const config = loadBotConfig();
   const bot = new Telegraf(config.telegramBotToken);
   const notificationChatId = [...config.allowedChatIds][0];
-
-  interface StoredClarification {
-    chatId: number; emailFrom: string; emailSubject: string; claudeQuestion: string; createdAt: number;
-  }
-  let proposals: { rows: unknown[]; summary: string; createdAt: number }[] = [];
-  let clarifications: StoredClarification[] = [];
-  try {
-    const store = JSON.parse(fs.readFileSync(path.resolve("data/bot/pending-proposals.json"), "utf8")) as Record<string, typeof proposals>;
-    proposals = Object.values(store).flat();
-  } catch { /* no pending proposals */ }
-  try {
-    const store = JSON.parse(fs.readFileSync(path.resolve("data/bot/pending-clarifications.json"), "utf8")) as Record<string, StoredClarification>;
-    // Stale entries where Claude actually concluded NO_TRANSACTION are noise.
-    clarifications = Object.values(store).filter((c) => !c.claudeQuestion.includes("NO_TRANSACTION"));
-  } catch { /* no pending clarifications */ }
+  const { proposals, clarifications } = loadPendingBacklog();
 
   if (proposals.length === 0 && clarifications.length === 0) {
     console.log("Sin pendientes — no se envía recordatorio.");
