@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bbw-bot-interactive</string>
+
+  <!--
+    INTERIM: Telegram-only interactive bot (src/bot/index.ts — no IMAP poller,
+    no webhook, never writes without user confirmation). Exists so the user
+    can answer clarifications while the batch pipeline lives on the Mac.
+    Remove at Proxmox cutover (replaced by systemd bbw-bot.service).
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer/scripts/launchd/run-bot-interactive.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer/data/bot/bot-interactive.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/mvazquez/Repos/budgetbakers-wallet-importer/data/bot/bot-interactive.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
