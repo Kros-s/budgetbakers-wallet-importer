@@ -1,48 +1,51 @@
-# Migración a Proxmox (contenedor Docker)
+# Migración a Proxmox — despliegue NATIVO (elegido 2026-08-05)
 
-Objetivo: sacar el importador del Mac mini. El batch corre como contenedor
-one-shot disparado por cron del host; el bot interactivo de Telegram es un
-contenedor opcional de larga vida.
+Decisión del usuario: **sin Docker**. Node 22 + Claude Code CLI directo en un
+LXC, con systemd timers. Se porta TODO: batch nocturno (20:00), recordatorio
+(10:30) y bot interactivo de Telegram. (El Dockerfile/compose del repo queda
+como alternativa, no es la ruta activa.)
 
-## Requisitos en el host (LXC o VM con Docker)
+## Piezas (en `scripts/deploy/`)
 
-- Docker + docker compose.
-- Zona horaria del host: `America/Mexico_City` (las ventanas 20:00→20:00
-  dependen de ella).
-- El contenedor LXC debe permitir nesting si se usa LXC (`features: nesting=1`).
+- `provision-lxc.sh` — corre EN el LXC: timezone, Node 22, pnpm, Claude CLI,
+  build, usuario de servicio `bbw`, instala y habilita las unidades.
+- `systemd/bbw-daily.{service,timer}` — batch one-shot a las 20:00,
+  `Persistent=true` (si el LXC estuvo apagado, dispara al arrancar y la
+  ventana watermark cubre el hueco).
+- `systemd/bbw-remind.{service,timer}` — recordatorio 10:30, no persistente.
+- `systemd/bbw-bot.service` — bot interactivo, `Restart=on-failure` (es el
+  único proceso de larga vida; nunca escribe sin confirmación).
 
-## Preparación (una vez, en el Mac)
+## Requisitos del LXC
 
-1. Crear el token de auth del CLI de Claude (larga vida, revocable):
-   `claude setup-token` → guarda el valor como `CLAUDE_CODE_OAUTH_TOKEN`.
-2. Verificar paridad en el Mac antes del cutover:
-   `docker compose run --rm importer --dry-run` debe proponer lo mismo que
-   la corrida nativa.
+- Debian 12 / Ubuntu 22.04+, acceso a internet, ~2 GB RAM.
+- NO necesita nesting (sin Docker).
 
-## Cutover
+## Pasos
 
-1. En el Mac: descargar el LaunchAgent nuevo si ya estaba activo
-   (`launchctl bootout gui/$(id -u)/com.bbw-daily`). Los dos viejos ya están
-   `.disabled` — no tocarlos.
-2. Copiar al host: repo → `/opt/bbw`, y rsync de `data/` y `.env.local`
-   (contiene credenciales IMAP/Telegram/Couch; `chmod 600`).
-   `CLAUDE_CODE_OAUTH_TOKEN` va en `/opt/bbw/.env` (lo lee compose), no en git.
-3. `cd /opt/bbw && docker compose build importer`
-4. Validar: `docker compose run --rm importer --dry-run`
-   (la ventana watermark cubre sola los días del traslado).
-5. Cron del host:
-   ```
-   0 20 * * *  cd /opt/bbw && docker compose run --rm importer >> data/bot/daily.out.log 2>&1
-   30 10 * * * cd /opt/bbw && docker compose run --rm importer --remind >> data/bot/daily.out.log 2>&1
-   ```
-6. Bot interactivo (opcional): `docker compose --profile bot up -d bot`.
-   Nota: la transcripción de voz (whisper) no está instalada en la imagen;
-   si se usa, añadir el binario al Dockerfile o desactivar audio.
-7. Supervisar la primera corrida de las 20:00 (resumen en Telegram) y después
-   borrar los plists `.disabled` del Mac.
+1. **Acceso**: agregar la llave pública del Mac (`~/.ssh/id_ed25519.pub`) a
+   `root@<lxc>:/root/.ssh/authorized_keys` (las llaves actuales del usuario
+   viven en otra máquina).
+2. **Token del CLI** (una vez, en el Mac): `claude setup-token` →
+   en el LXC crear `/etc/bbw.env` con `CLAUDE_CODE_OAUTH_TOKEN=...` (600).
+3. **Copiar**: `rsync -a --exclude node_modules --exclude dist repo/ root@lxc:/opt/bbw/`
+   y aparte `data/` + `.env.local` (600).
+4. **Provisionar**: `ssh root@lxc bash /opt/bbw/scripts/deploy/provision-lxc.sh`
+5. **Paridad**: `sudo -u bbw node /opt/bbw/dist/cli/process-window.js --dry-run`
+   debe proponer lo mismo que el Mac.
+6. **Cutover**: verificar `systemctl list-timers 'bbw-*'`; arrancar el bot
+   (`systemctl start bbw-bot`); en el Mac NO recargar ningún LaunchAgent
+   (los viejos ya están `.disabled`; `com.bbw-daily` nunca se activó).
+   Detener también el bot interactivo temporal del Mac.
+7. Supervisar la primera corrida de las 20:00 (resumen en Telegram).
+8. Después de 2–3 noches estables: borrar los plists `.disabled` del Mac.
 
-## Rollback
+## Notas
 
-El estado completo vive en `data/` — para volver al Mac basta rsync inverso y
-recargar el LaunchAgent `com.bbw-daily`. Ninguna pieza guarda estado fuera de
-`data/` y Wallet/CouchDB.
+- Voz (whisper) en el bot: no se instala por defecto; si se usa audio en
+  Telegram, instalar whisper en el LXC (`pipx install openai-whisper`) y
+  definir `WHISPER_BIN` en `.env.local`, o ignorar audios.
+- Estado completo en `/opt/bbw/data` — rollback = rsync inverso al Mac.
+- El "watcher" que revivía el LaunchAgent viejo en el Mac sigue sin
+  localizarse: al migrar, verificar que nada en el Mac levante el bot de
+  nuevo (`pgrep -fl main.ts`).

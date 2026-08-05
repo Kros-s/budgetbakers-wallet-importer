@@ -1,0 +1,13 @@
+[Unit]
+Description=BudgetBakers importer — daily batch run (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bbw
+WorkingDirectory=/opt/bbw
+EnvironmentFile=-/etc/bbw.env
+Environment=TZ=America/Mexico_City
+ExecStart=/usr/bin/node /opt/bbw/dist/cli/process-window.js
+TimeoutStartSec=4h

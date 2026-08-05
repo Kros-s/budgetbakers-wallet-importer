@@ -1,0 +1,16 @@
+[Unit]
+Description=BudgetBakers interactive Telegram bot (photos, tickets, clarifications)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bbw
+WorkingDirectory=/opt/bbw
+EnvironmentFile=-/etc/bbw.env
+Environment=TZ=America/Mexico_City
+ExecStart=/usr/bin/node /opt/bbw/dist/bot/index.js
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

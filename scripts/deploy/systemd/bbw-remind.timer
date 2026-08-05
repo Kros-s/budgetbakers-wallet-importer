@@ -1,0 +1,9 @@
+[Unit]
+Description=Pending-approvals reminder at 10:30 (not persistent: a late reminder is noise)
+
+[Timer]
+OnCalendar=*-*-* 10:30:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

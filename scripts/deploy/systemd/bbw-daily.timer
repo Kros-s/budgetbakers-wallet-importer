@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily batch run at 20:00 (Persistent: missed runs fire after boot; watermark self-heals downtime)
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
