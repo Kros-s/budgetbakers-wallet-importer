@@ -9,6 +9,25 @@ import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 
+/** Shared account/category catalog — used by the email prompt and the
+ * statement reconciler so both speak the same names. */
+export const CATALOG_PROMPT = `Cuentas disponibles (usa el nombre exacto):
+Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest
+Nota: "Banorte débito" = débito ****5933; "Banorte" = crédito ****4033; "Platinum Credit Card" = AmEx Platinum
+
+Categorías disponibles (usa el nombre exacto):
+Groceries, "Restaurant, fast-food", "Bar, cafe", "Food & Drinks", Candy, Despensa,
+"Health care, doctor", "Drug-store, chemist", "Health and beauty", "Wellness, beauty",
+"Public transport", Taxi, Fuel, Transportation, "Long distance", Parking, Vehicle, "Vehicle maintenance", "Vehicle insurance",
+Rent, Mortgage, Housing, "Home, garden", "Maintenance, repairs", "Energy, utilities", Services, Rentals, "Property insurance",
+Shopping, "Clothes & shoes", "Electronics, accessories", "Jewels, accessories", "Stationery, tools",
+"Free time", "Culture, sport events", "Active sport, fitness", "TV, Streaming", Hobbies, "Books, audio, subscriptions", "Holiday, trips, hotels", "Life events", "Life & Entertainment", "Alcohol, tobacco", "Software, apps, games",
+Kids, "Pets, animals", "Child Support",
+"Transfer, withdraw", "Financial expenses", "Financial investments", Investments, Realty, "Interests, dividends", "Loan, interests", Leasing, "Charges, Fees", Taxes, Fines, Insurances, Debts, "Checks, coupons", "Lending, renting",
+"Wage, invoices", Income, "Rental income", Sale, "Refunds (tax, purchase)", Gifts, "Lottery, gambling",
+"Phone, cell phone", Internet, "Communication, PC", "Postal services",
+"Education, development", "Business trips", Advisory, "Charity, gifts", "Gifts, joy", "Dues & grants", Tips, Others`;
+
 export const EMAIL_SYSTEM_PROMPT = `Eres un extractor de transacciones bancarias. Analiza el correo que recibes y:
 
 1. Si NO contiene una transacción real (marketing, promoción, OTP, aviso sin monto, estado de cuenta sin movimientos individuales): responde exactamente: NO_TRANSACTION
@@ -31,22 +50,7 @@ Reglas:
 - TRANSFERENCIAS AMBIGUAS: Si el correo muestra una transferencia SPEI, pago interbancario o "pago a tercero" y el destinatario NO es claramente una de las cuentas del usuario: pregunta "¿Es transferencia entre tus cuentas o un pago a alguien/servicio? Si es pago, ¿qué categoría corresponde?". Usa "Transfer, withdraw" SOLO cuando estés seguro de que es un movimiento entre las cuentas propias del usuario (p.ej. pago de tarjeta de crédito propia, traspaso a su cuenta de ahorro).
 - Para registrar una transferencia entre cuentas propias del usuario emite DOS filas CSV con la MISMA fecha/hora exacta y categoría "Transfer, withdraw": una negativa en la cuenta origen y una positiva en la cuenta destino. NUNCA emitas una sola fila con categoría Transfer (se rechaza). Para dinero que llega de fuera (no es cuenta propia), usa categoría de ingreso normal (p.ej. Others o "Wage, invoices"), no Transfer.
 
-Cuentas disponibles (usa el nombre exacto):
-Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest
-Nota: "Banorte débito" = débito ****5933; "Banorte" = crédito ****4033; "Platinum Credit Card" = AmEx Platinum
-
-Categorías disponibles (usa el nombre exacto):
-Groceries, "Restaurant, fast-food", "Bar, cafe", "Food & Drinks", Candy, Despensa,
-"Health care, doctor", "Drug-store, chemist", "Health and beauty", "Wellness, beauty",
-"Public transport", Taxi, Fuel, Transportation, "Long distance", Parking, Vehicle, "Vehicle maintenance", "Vehicle insurance",
-Rent, Mortgage, Housing, "Home, garden", "Maintenance, repairs", "Energy, utilities", Services, Rentals, "Property insurance",
-Shopping, "Clothes & shoes", "Electronics, accessories", "Jewels, accessories", "Stationery, tools",
-"Free time", "Culture, sport events", "Active sport, fitness", "TV, Streaming", Hobbies, "Books, audio, subscriptions", "Holiday, trips, hotels", "Life events", "Life & Entertainment", "Alcohol, tobacco", "Software, apps, games",
-Kids, "Pets, animals", "Child Support",
-"Transfer, withdraw", "Financial expenses", "Financial investments", Investments, Realty, "Interests, dividends", "Loan, interests", Leasing, "Charges, Fees", Taxes, Fines, Insurances, Debts, "Checks, coupons", "Lending, renting",
-"Wage, invoices", Income, "Rental income", Sale, "Refunds (tax, purchase)", Gifts, "Lottery, gambling",
-"Phone, cell phone", Internet, "Communication, PC", "Postal services",
-"Education, development", "Business trips", Advisory, "Charity, gifts", "Gifts, joy", "Dues & grants", Tips, Others
+${CATALOG_PROMPT}
 
 Si el usuario revela un hecho estable y reutilizable (de quién es una tarjeta, a qué cuenta va un cargo recurrente, categoría habitual de un comercio, o pide explícitamente "guárdalo en memoria"), emite ADEMÁS un bloque:
 <<<RULE>>>

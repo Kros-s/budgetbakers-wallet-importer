@@ -41,6 +41,7 @@ import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../c
 import { loadDirectCredentials } from "../direct-auth.js";
 import { deleteRecords, getRecord } from "../records.js";
 import { sendSafeMessage } from "../bot/telegram-safe.js";
+import { missingStatements } from "../statements/registry.js";
 import {
   EMAIL_MODEL, EMAIL_SYSTEM_PROMPT, buildEmailPrompt, processEmail,
 } from "../webhook/email-processor.js";
@@ -316,6 +317,10 @@ async function main() {
   // across ALL runs, not just this run's increments (which mislead after a
   // resumed or partial run).
   const backlog = loadPendingBacklog();
+  const overdue = missingStatements();
+  const statementNag = overdue.length
+    ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándalos con /statement o déjalos en data/statements/inbox/`
+    : "";
   const summary =
     `📦 *Batch ${localDayStr()}*\n` +
     `Ventana: ${from.toISOString().slice(0, 16)} → ${to.toISOString().slice(0, 16)}\n` +
@@ -328,7 +333,8 @@ async function main() {
     (counts.failed > 0 ? `⚠️ Fallidos (se reintentan): ${counts.failed}\n` : "") +
     (exhausted.length > 0
       ? `❌ Agotados (${MAX_ATTEMPTS} intentos): ${exhausted.map((f) => `"${f.subject.slice(0, 40)}"`).join(", ")}`
-      : "");
+      : "") +
+    statementNag;
   console.log(`\n${summary.replace(/\*/g, "")}`);
   try {
     await sendSafeMessage(bot.telegram, notificationChatId, summary);
