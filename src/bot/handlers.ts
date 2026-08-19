@@ -48,7 +48,12 @@ import {
 } from "../webhook/clarification-store.js";
 import { EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
 import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "../webhook/learned-rules.js";
-import { escapeMarkdown, replySafe } from "./telegram-safe.js";
+import {
+  ensureShortIds, findByShortId, rekeyClarification, takeByShortId,
+} from "../webhook/clarification-store.js";
+import { formatPendingList, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
+import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
+import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
 
 export interface HandlerDeps {
   bot: Telegraf;
@@ -417,6 +422,61 @@ export function registerHandlers(deps: HandlerDeps): void {
     );
   });
 
+  // ── Cola de aclaraciones ──────────────────────────────────────────────────
+  // Responder al mensaje original funciona mientras la pregunta es reciente y
+  // deja de servir con 42 acumuladas. Estos comandos permiten atenderlas por
+  // handle, sin buscar nada en el historial.
+
+  bot.command("pending", async (ctx) => {
+    const limit = Number(ctx.message.text.split(/\s+/)[1]) || 10;
+    const items = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
+    await ctx.reply(formatPendingList(items, Math.min(Math.max(limit, 1), 50)));
+  });
+
+  bot.command("remind", async (ctx) => {
+    const count = Math.min(Math.max(Number(ctx.message.text.split(/\s+/)[1]) || 5, 1), 10);
+    const items = sortByImportance(ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id));
+    if (items.length === 0) {
+      await ctx.reply("✅ No hay aclaraciones pendientes.");
+      return;
+    }
+    const batch = items.slice(0, count);
+    await ctx.reply(`🔔 Reenviando ${batch.length} de ${items.length}, mayores primero.`);
+    for (const { messageId, entry } of batch) {
+      const sent = await sendSafeMessage(
+        deps.bot.telegram,
+        ctx.chat.id,
+        `📧 *#${entry.shortId} · ${escapeMarkdown(entry.emailFrom)}*\n\n` +
+          `Asunto: ${escapeMarkdown(entry.emailSubject)}\n\n${entry.claudeQuestion}\n\n` +
+          `_↩️ Responde a este mensaje, o escribe \`#${entry.shortId} tu respuesta\`._`
+      );
+      // Keep the handle, follow the new message so reply-to works again.
+      rekeyClarification(messageId, sent.message_id);
+    }
+  });
+
+  bot.command("next", async (ctx) => {
+    const items = sortByImportance(ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id));
+    if (items.length === 0) {
+      stopGuided(ctx.chat.id);
+      await ctx.reply("✅ No queda ninguna aclaración pendiente.");
+      return;
+    }
+    const { entry } = items[0];
+    startGuided(ctx.chat.id, entry.shortId!);
+    await sendSafeMessage(
+      deps.bot.telegram,
+      ctx.chat.id,
+      `🧭 *Modo guiado \\(beta\\)* · quedan ${items.length}\n\n` +
+        `📧 *#${entry.shortId} · ${escapeMarkdown(entry.emailFrom)}*\n${entry.claudeQuestion}\n\n` +
+        `_Responde con texto normal en los próximos 2 minutos. Luego /next para la siguiente, o /stop para salir._`
+    );
+  });
+
+  bot.command("stop", async (ctx) => {
+    await ctx.reply(stopGuided(ctx.chat.id) ? "🧭 Modo guiado cerrado." : "No había modo guiado abierto.");
+  });
+
   bot.on(message("photo"), async (ctx) => {
     try {
       const session = getOrCreateSession(ctx.chat.id);
@@ -579,6 +639,66 @@ export function registerHandlers(deps: HandlerDeps): void {
         return;
       }
       // Falls through: user is amending — let Claude refine it.
+    }
+
+    // ── Respuestas por handle: `#12 Groceries`, una o varias por mensaje ──
+    if (looksLikeHandleAnswer(text)) {
+      const answers = parseAnswers(text);
+      const missing: number[] = [];
+      let handled = 0;
+      for (const { shortId, answer } of answers) {
+        // Capture the Telegram id first: on failure the question goes back
+        // under its own key, so reply-to keeps working on the original message.
+        const found = findByShortId(shortId);
+        const entry = found ? takeByShortId(shortId) : null;
+        if (!entry || !found) {
+          missing.push(shortId);
+          continue;
+        }
+        try {
+          await replySafe(ctx, `📧 #${shortId} · procesando tu respuesta…`);
+          await processUserTurn(deps, ctx, session, buildClarificationPrompt(entry, answer), EMAIL_SYSTEM_PROMPT);
+          handled++;
+        } catch (err) {
+          // Never let an answer vanish: put the question back so it can be retried.
+          storeClarification(found.messageId, entry);
+          log.error("Handle answer failed", { shortId, error: err instanceof Error ? err.message : String(err) });
+          await ctx.reply(`❌ #${shortId} falló: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (missing.length) {
+        await ctx.reply(
+          `⚠️ Sin pendiente para ${missing.map((m) => `#${m}`).join(", ")} — puede que ya se resolviera. /pending para ver la lista.`
+        );
+      }
+      if (handled === 0 && missing.length === 0) {
+        await ctx.reply("No entendí ninguna respuesta. Formato: `#12 tu respuesta`");
+      }
+      return;
+    }
+
+    // ── Modo guiado: texto normal contesta la pregunta activa, 2 min ──
+    const guided = activeQuestion(ctx.chat.id);
+    if (guided !== null) {
+      const found = findByShortId(guided);
+      const entry = found ? takeByShortId(guided) : null;
+      if (entry && found) {
+        stopGuided(ctx.chat.id);
+        try {
+          await replySafe(ctx, `📧 #${guided} · procesando tu respuesta…`);
+          await processUserTurn(deps, ctx, session, buildClarificationPrompt(entry, text), EMAIL_SYSTEM_PROMPT);
+          await ctx.reply("Siguiente con /next, o /stop para salir.");
+        } catch (err) {
+          storeClarification(found.messageId, entry);
+          await ctx.reply(`❌ Falló: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    } else if (justExpired(ctx.chat.id)) {
+      stopGuided(ctx.chat.id);
+      await ctx.reply(
+        "⏱️ La ventana de 2 minutos del modo guiado se cerró, así que tomo esto como mensaje nuevo. Usa /next para reabrirla."
+      );
     }
 
     // Only resolve a clarification via explicit reply-to — never auto-consume free text.

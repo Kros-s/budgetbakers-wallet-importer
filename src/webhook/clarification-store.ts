@@ -2,6 +2,19 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, r
 import { join } from "path";
 
 export interface ClarificationEntry {
+  /**
+   * Short, permanent handle the user types to answer: `#118 salió de Banorte`.
+   *
+   * Deliberately NOT the position in a listing. A positional number answered a
+   * few minutes later would land on whichever question had shifted into that
+   * slot — a silent mistake that writes to real finances. It is also not the
+   * Telegram message id, because /remind re-sends the question and that id
+   * changes; this one survives.
+   *
+   * Optional only for entries created before the field existed; ensureShortIds
+   * backfills them.
+   */
+  shortId?: number;
   chatId: number;
   emailFrom: string;
   emailSubject: string;
@@ -99,7 +112,9 @@ export function storeClarification(messageId: number, entry: ClarificationEntry)
         delete store[key];
       }
     }
-    store[String(messageId)] = entry;
+    const shortId =
+      entry.shortId ?? Math.max(0, ...Object.values(store).map((e) => e.shortId ?? 0)) + 1;
+    store[String(messageId)] = { ...entry, shortId };
     save(store);
   });
 }
@@ -115,6 +130,62 @@ export function takeClarification(messageId: number): ClarificationEntry | null 
       save(store);
     }
     return entry;
+  });
+}
+
+/** Assigns a handle to any entry that predates the field. Returns them all. */
+export function ensureShortIds(): Array<{ messageId: number; entry: ClarificationEntry }> {
+  return withLock(() => {
+    const store = load();
+    let next = Math.max(0, ...Object.values(store).map((e) => e.shortId ?? 0)) + 1;
+    let changed = false;
+    // Oldest first, so the handles read in the order the questions arrived.
+    for (const key of Object.keys(store).sort((a, b) => Number(a) - Number(b))) {
+      if (store[key].shortId === undefined) {
+        store[key].shortId = next++;
+        changed = true;
+      }
+    }
+    if (changed) save(store);
+    return Object.entries(store).map(([k, entry]) => ({ messageId: Number(k), entry }));
+  });
+}
+
+/** Looks up a pending clarification by its handle, without removing it. */
+export function findByShortId(shortId: number): { messageId: number; entry: ClarificationEntry } | null {
+  for (const [key, entry] of Object.entries(load())) {
+    if (entry.shortId === shortId) return { messageId: Number(key), entry };
+  }
+  return null;
+}
+
+/** Removes and returns the clarification with this handle. */
+export function takeByShortId(shortId: number): ClarificationEntry | null {
+  return withLock(() => {
+    const store = load();
+    for (const [key, entry] of Object.entries(store)) {
+      if (entry.shortId === shortId) {
+        delete store[key];
+        save(store);
+        return entry;
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * Moves a clarification to a new Telegram message id, keeping its handle.
+ * Used by /remind, which re-sends the question so reply-to works on it again.
+ */
+export function rekeyClarification(oldMessageId: number, newMessageId: number): void {
+  withLock(() => {
+    const store = load();
+    const entry = store[String(oldMessageId)];
+    if (!entry) return;
+    delete store[String(oldMessageId)];
+    store[String(newMessageId)] = entry;
+    save(store);
   });
 }
 
