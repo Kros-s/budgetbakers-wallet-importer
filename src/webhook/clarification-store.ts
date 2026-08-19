@@ -118,6 +118,11 @@ export function takeClarification(messageId: number): ClarificationEntry | null 
   });
 }
 
+/** Every pending clarification, for the post-run integrity check and reminders. */
+export function listClarifications(): Array<{ messageId: number; entry: ClarificationEntry }> {
+  return Object.entries(load()).map(([key, entry]) => ({ messageId: Number(key), entry }));
+}
+
 /** Returns (without removing) the most recent clarification for a chat, if any. */
 export function peekLatestClarification(
   chatId: number

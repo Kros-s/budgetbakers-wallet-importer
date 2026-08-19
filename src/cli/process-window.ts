@@ -37,6 +37,8 @@ import {
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { loadBotConfig } from "../bot/config.js";
 import { runClaude, UsageLimitError } from "../bot/claude-runner.js";
+import { checkRunIntegrity, formatFindings } from "../batch/integrity.js";
+import { listClarifications } from "../webhook/clarification-store.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
 import { deleteRecords, getRecord } from "../records.js";
@@ -329,6 +331,45 @@ async function main() {
   const statementNag = overdue.length
     ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándalos con /statement o déjalos en data/statements/inbox/`
     : "";
+  // Structural sanity check over what this run actually wrote. A run that
+  // reports "complete, 0 failed" can still hold a serious error — on
+  // 2026-08-19 it held a $323,000 transfer booked as an expense.
+  let integrityNote = "";
+  try {
+    const categoryNames: Record<string, string> = {};
+    for (const [name, id] of Object.entries(lookup.categories)) categoryNames[id] = name;
+    const writtenDocs = [];
+    for (const r of ledger.records) {
+      try {
+        const doc = await getRecord(couch, r.couchId);
+        writtenDocs.push({
+          id: doc._id,
+          amountCents: Number(doc.amount),
+          type: Number(doc.type),
+          transfer: Boolean(doc.transfer),
+          accountId: String(doc.accountId),
+          categoryName: categoryNames[String(doc.categoryId)],
+          payee: doc.payee,
+          note: doc.note,
+          recordDate: String(doc.recordDate),
+        });
+      } catch { /* a record we cannot re-read is not worth failing the run over */ }
+    }
+    integrityNote = formatFindings(
+      checkRunIntegrity({
+        written: writtenDocs,
+        pending: listClarifications().map((c) => ({
+          messageId: c.messageId,
+          claudeQuestion: c.entry.claudeQuestion,
+          emailSubject: c.entry.emailSubject,
+        })),
+      })
+    );
+    if (integrityNote) console.log(`\n${integrityNote.replace(/\*/g, "")}`);
+  } catch (err) {
+    console.error(`   ⚠ revisión de integridad no pudo correr: ${err instanceof Error ? err.message : err}`);
+  }
+
   const pausedNote = paused
     ? `\n⏸ *Pausado por límite de uso* — procesados ${paused.done} de ${paused.total}. ` +
       `Los ${paused.total - paused.done} restantes NO se marcaron como fallidos y se retoman en la siguiente ventana.\n`
@@ -346,7 +387,8 @@ async function main() {
     (exhausted.length > 0
       ? `❌ Agotados (${MAX_ATTEMPTS} intentos): ${exhausted.map((f) => `"${f.subject.slice(0, 40)}"`).join(", ")}`
       : "") +
-    statementNag;
+    statementNag +
+    integrityNote;
   console.log(`\n${summary.replace(/\*/g, "")}`);
   try {
     await sendSafeMessage(bot.telegram, notificationChatId, summary);
