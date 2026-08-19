@@ -13,9 +13,21 @@ set -euo pipefail
 
 APP_DIR=/opt/bbw
 UNIT_SRC="$APP_DIR/scripts/deploy/systemd"
+# The service user's HOME. NOT $APP_DIR: the Claude CLI writes ~/.claude
+# (config + --resume session state) and $APP_DIR is owned by root, so a HOME
+# inside it makes every `claude` invocation fail with exit code 1.
+SVC_HOME=/var/lib/bbw
 
 echo "── Timezone (las ventanas 20:00→20:00 dependen de esto)"
-timedatectl set-timezone America/Mexico_City
+# timedatectl talks to systemd-timedated, which is often denied in an
+# unprivileged container. The symlink is the fallback that always works.
+timedatectl set-timezone America/Mexico_City 2>/dev/null \
+  || ln -sf /usr/share/zoneinfo/America/Mexico_City /etc/localtime
+
+echo "── Paquetes base"
+# gnupg + ca-certificates are required by the NodeSource setup script.
+apt-get update
+apt-get install -y ca-certificates curl gnupg unzip rsync git
 
 echo "── Node 22 + pnpm"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v22* ]]; then
@@ -34,11 +46,25 @@ pnpm install --frozen-lockfile
 pnpm build
 
 echo "── Usuario de servicio"
-id -u bbw >/dev/null 2>&1 || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin bbw
+id -u bbw >/dev/null 2>&1 || useradd --system --home "$SVC_HOME" --shell /usr/sbin/nologin bbw
+mkdir -p "$SVC_HOME"
+chown bbw:bbw "$SVC_HOME"
+chmod 700 "$SVC_HOME"
 mkdir -p "$APP_DIR/data/bot" "$APP_DIR/data/imap" "$APP_DIR/data/statements/inbox"
 chown -R bbw:bbw "$APP_DIR/data"
-[ -f "$APP_DIR/.env.local" ] && chown bbw:bbw "$APP_DIR/.env.local" && chmod 600 "$APP_DIR/.env.local"
-[ -f /etc/bbw.env ] && chmod 600 /etc/bbw.env
+# Guarded with if/then, not `[ -f ] && ...`: under `set -e` a false test at the
+# head of an && list aborts the whole script before the units are installed.
+if [ -f "$APP_DIR/.env.local" ]; then
+  chown bbw:bbw "$APP_DIR/.env.local"
+  chmod 600 "$APP_DIR/.env.local"
+else
+  echo "   AVISO: falta $APP_DIR/.env.local — el batch no podrá leer IMAP ni CouchDB."
+fi
+if [ -f /etc/bbw.env ]; then
+  chmod 600 /etc/bbw.env
+else
+  echo "   AVISO: falta /etc/bbw.env — el CLI de Claude no tendrá token."
+fi
 
 echo "── Unidades systemd"
 cp "$UNIT_SRC"/bbw-*.service "$UNIT_SRC"/bbw-*.timer /etc/systemd/system/

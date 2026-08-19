@@ -6,8 +6,9 @@ Wants=network-online.target
 [Service]
 User=bbw
 WorkingDirectory=/opt/bbw
-EnvironmentFile=-/etc/bbw.env
+EnvironmentFile=/etc/bbw.env
 Environment=TZ=America/Mexico_City
+Environment=HOME=/var/lib/bbw
 ExecStart=/usr/bin/node /opt/bbw/dist/bot/index.js
 Restart=on-failure
 RestartSec=30

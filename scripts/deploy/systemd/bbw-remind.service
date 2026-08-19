@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=oneshot
 User=bbw
 WorkingDirectory=/opt/bbw
-EnvironmentFile=-/etc/bbw.env
+EnvironmentFile=/etc/bbw.env
 Environment=TZ=America/Mexico_City
+Environment=HOME=/var/lib/bbw
 ExecStart=/usr/bin/node /opt/bbw/dist/cli/process-window.js --remind
