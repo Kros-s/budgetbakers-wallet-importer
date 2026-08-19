@@ -50,6 +50,33 @@ const USAGE_LIMIT_PATTERNS: RegExp[] = [
   /insufficient credit|credit balance/i,
 ];
 
+/**
+ * Thrown when `--resume` names a conversation the CLI does not have.
+ *
+ * Session ids live in data/bot/sessions.json, which travels with the data
+ * directory, while the conversations themselves live in ~/.claude on the
+ * machine that created them. Moving the bot to another host — as on the
+ * 2026-08-19 LXC migration — leaves the ids pointing at nothing, and every
+ * reply the user sends fails until the store is cleared by hand.
+ */
+export class StaleSessionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleSessionError";
+  }
+}
+
+const STALE_SESSION_PATTERNS: RegExp[] = [
+  /no conversation found with session id/i,
+  /session .* not found/i,
+  /no such session/i,
+];
+
+export function isStaleSessionText(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return STALE_SESSION_PATTERNS.some((r) => r.test(text));
+}
+
 export function isUsageLimitText(text: string | null | undefined): boolean {
   if (!text) return false;
   return USAGE_LIMIT_PATTERNS.some((r) => r.test(text));
@@ -156,6 +183,11 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
 
   if (code !== 0) {
     const tail = stderr.trim().split("\n").slice(-5).join("\n");
+    if (isStaleSessionText(stderr) || isStaleSessionText(stdout)) {
+      throw new StaleSessionError(
+        `claude no encontró la sesión a reanudar. Stderr tail:\n${tail || "<empty>"}`
+      );
+    }
     if (isUsageLimitText(stderr) || isUsageLimitText(stdout)) {
       throw new UsageLimitError(
         `claude hit a usage limit (exit ${code}). Stderr tail:\n${tail || "<empty>"}`

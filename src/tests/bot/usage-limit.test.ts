@@ -36,3 +36,20 @@ test("UsageLimitError is distinguishable from a plain Error", () => {
   assert.equal(err.name, "UsageLimitError");
   assert.equal(new Error("limit") instanceof UsageLimitError, false);
 });
+
+test("recognises a resume pointing at a conversation the CLI does not have", async () => {
+  const { isStaleSessionText, StaleSessionError } = await import("../../bot/claude-runner.js");
+  // The exact stderr seen after the 2026-08-19 host migration.
+  assert.equal(
+    isStaleSessionText("No conversation found with session ID: f3144c17-0c22-4a5e-a579-bd86129fb6c4"),
+    true
+  );
+  assert.equal(isStaleSessionText("Session abc not found"), true);
+  // Must not swallow the unrelated failures.
+  assert.equal(isStaleSessionText("Claude usage limit reached"), false);
+  assert.equal(isStaleSessionText("timeout after 90000ms"), false);
+  assert.equal(isStaleSessionText(null), false);
+  const err = new StaleSessionError("x");
+  assert.ok(err instanceof StaleSessionError);
+  assert.equal(new Error("x") instanceof StaleSessionError, false);
+});

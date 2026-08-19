@@ -27,7 +27,7 @@ import { writeRecords } from "../records.js";
 import type { Logger } from "../logger.js";
 
 import type { BotConfig } from "./config.js";
-import { runClaude } from "./claude-runner.js";
+import { runClaude, StaleSessionError } from "./claude-runner.js";
 import { downloadTelegramFile } from "./telegram-files.js";
 import { transcribeAudio } from "./whisper.js";
 import {
@@ -169,13 +169,18 @@ async function processUserTurn(
   systemPrompt: string = SYSTEM_PROMPT
 ): Promise<void> {
   const { config, log } = deps;
-  const isFirstTurn = session.turnsSent === 0;
+  let activeSession = session;
+  let isFirstTurn = activeSession.turnsSent === 0;
 
   await ctx.sendChatAction("typing").catch(() => {});
 
-  const result = await runClaude({
+  // A resume can fail because the conversation lives in another machine's
+  // ~/.claude — the state after a host migration. Losing the context is
+  // unavoidable there; losing the user's message is not, so start a fresh
+  // session and replay this turn into it.
+  const invoke = () => runClaude({
     config,
-    sessionId: session.claudeSessionId,
+    sessionId: activeSession.claudeSessionId,
     isFirstTurn,
     prompt,
     appendSystemPrompt: systemPrompt,
@@ -194,11 +199,25 @@ async function processUserTurn(
     timeoutMs: 240_000,
   });
 
-  markTurnSent(session.chatId);
+  let result;
+  try {
+    result = await invoke();
+  } catch (err) {
+    if (!(err instanceof StaleSessionError) || isFirstTurn) throw err;
+    log("Sesión de Claude no encontrada — reiniciándola y reintentando el turno", {
+      chatId: activeSession.chatId,
+      staleSessionId: activeSession.claudeSessionId,
+    });
+    activeSession = resetSession(activeSession.chatId);
+    isFirstTurn = true;
+    result = await invoke();
+  }
+
+  markTurnSent(activeSession.chatId);
 
   log("Claude turn", {
-    chatId: session.chatId,
-    sessionId: session.claudeSessionId,
+    chatId: activeSession.chatId,
+    sessionId: activeSession.claudeSessionId,
     isFirstTurn,
     ok: result.ok,
     durationMs: result.durationMs,
