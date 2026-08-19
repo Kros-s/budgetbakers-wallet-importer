@@ -38,7 +38,7 @@ import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { loadBotConfig } from "../bot/config.js";
 import { runClaude, UsageLimitError } from "../bot/claude-runner.js";
 import { checkRunIntegrity, formatFindings } from "../batch/integrity.js";
-import { pruneBotLogs, pruneLedgers } from "../batch/retention.js";
+import { pruneBotLogs, pruneLedgers, pruneVerdictLogs } from "../batch/retention.js";
 import { listClarifications } from "../webhook/clarification-store.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
@@ -338,6 +338,7 @@ async function main() {
     const botDataDir = path.resolve("data", "bot");
     const logs = pruneBotLogs(botDataDir);
     const olds = pruneLedgers(botDataDir);
+    pruneVerdictLogs(botDataDir);
     if (logs.deleted.length || olds.deleted.length) {
       console.log(`   🧹 retención: ${logs.deleted.length} log(s) y ${olds.deleted.length} ledger(s) eliminados`);
     }

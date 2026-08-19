@@ -87,6 +87,17 @@ export function pruneBotLogs(dataBotDir: string, now?: number): PruneResult {
   });
 }
 
+/** Prunes the discarded-email log, which grows one file per day. */
+export function pruneVerdictLogs(dataBotDir: string, now?: number): PruneResult {
+  return pruneOldFiles({
+    dir: dataBotDir,
+    pattern: /^verdicts-\d{4}-\d{2}-\d{2}\.jsonl$/,
+    maxAgeDays: LOG_RETENTION_DAYS,
+    keepNewest: 3,
+    now,
+  });
+}
+
 /** Prunes day ledgers, never touching the newest — the watermark lives there. */
 export function pruneLedgers(dataBotDir: string, now?: number): PruneResult {
   return pruneOldFiles({

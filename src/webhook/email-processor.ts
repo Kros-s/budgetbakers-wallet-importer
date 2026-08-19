@@ -7,6 +7,8 @@ import { convertRows, parseCsv } from "../csv.js";
 import { writeRecords } from "../records.js";
 import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
+import { challengeNoTransaction, parseVerdict } from "./verdict.js";
+import { logVerdict } from "./verdict-log.js";
 import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 
 /** Shared account/category catalog — used by the email prompt and the
@@ -166,25 +168,45 @@ export async function processEmail(
   for (const rule of rules) appendLearnedRule(rule);
   const ruleNote = rules.map((r) => `\n\n🧠 Regla guardada: ${r}`).join("");
 
-  if (responseText === "NO_TRANSACTION") {
-    return { status: "no_transaction", written: 0, costUsd: result.costUsd };
+  // Discarding an email is the only decision here with no downstream check, so
+  // it gets a deterministic second opinion before it is allowed to stand.
+  const verdict = parseVerdict(responseText);
+  let effectiveText = responseText;
+  if (verdict.isNoTransaction) {
+    const challenge = challengeNoTransaction({
+      from: payload.from,
+      subject: payload.subject,
+      body: payload.text,
+      reason: verdict.reason,
+    });
+    logVerdict({
+      from: payload.from,
+      subject: payload.subject,
+      reason: verdict.reason,
+      challenged: challenge?.reason ?? null,
+    });
+    if (!challenge) {
+      return { status: "no_transaction", written: 0, costUsd: result.costUsd };
+    }
+    console.log(`[email] veredicto cuestionado — ${challenge.reason}`);
+    effectiveText = challenge.question;
   }
 
-  const { csv, cleanedText } = extractCsvBlock(responseText);
+  const { csv, cleanedText } = extractCsvBlock(effectiveText);
 
   // Claude asked a clarifying question — persist context to disk and notify user
   if (!csv) {
     const sent = await sendSafeMessage(
       bot.telegram,
       notificationChatId,
-      `📧 *Correo de ${escapeMarkdown(payload.from)}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${responseText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${ruleNote}`
+      `📧 *Correo de ${escapeMarkdown(payload.from)}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${effectiveText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${ruleNote}`
     );
     storeClarification(sent.message_id, {
       chatId: notificationChatId,
       emailFrom: payload.from,
       emailSubject: payload.subject,
       emailText: payload.text,
-      claudeQuestion: responseText,
+      claudeQuestion: effectiveText,
       createdAt: Date.now(),
     });
     return { status: "clarification", written: 0, costUsd: result.costUsd };
