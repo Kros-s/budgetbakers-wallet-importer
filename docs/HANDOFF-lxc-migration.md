@@ -63,13 +63,17 @@ pct exec 200 -- bash -c "openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:'<PASSPH
   chmod 600 /opt/bbw/.env.local && rm /root/bbw-secrets.tar.gz.enc"
 ```
 
-### 4. Token del Claude CLI (interactivo, lo corre el usuario)
+### 4. Token del Claude CLI
 
-`claude setup-token` (en cualquier máquina con su cuenta) → en el LXC:
+El bundle ya trae `bbw.env` con `CLAUDE_CODE_OAUTH_TOKEN` (generado por el
+usuario con `claude setup-token`). Muévelo a su lugar:
 
 ```bash
-pct exec 200 -- bash -c "echo 'CLAUDE_CODE_OAUTH_TOKEN=<token>' > /etc/bbw.env && chmod 600 /etc/bbw.env"
+pct exec 200 -- bash -c "mv /opt/bbw/bbw.env /etc/bbw.env && chmod 600 /etc/bbw.env"
 ```
+
+(Si el bundle no lo trajera, pide al usuario correr `claude setup-token` y
+crea /etc/bbw.env a mano con ese valor.)
 
 ### 5. Provisionar (instala Node 22, pnpm, Claude CLI, build, usuario bbw,
    timers systemd 20:00/10:30 y servicio del bot)
