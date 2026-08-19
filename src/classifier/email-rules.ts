@@ -40,6 +40,18 @@ export const DEFAULT_RULES: EmailRules = {
     "uber\\s*(one|eats)",
     "netflix\\.com",
     "spotify\\.com",
+    // Added from the 2026-08-19 catch-up dry-run: 100% NO_TRANSACTION over 285
+    // emails. Anchored to the sender domain — `block` matches from+subject, so
+    // a bare brand name would also block legitimate mail that merely mentions
+    // it (e.g. a transfer notice naming the destination bank).
+    // Private relay rewrites dots as underscores, hence [._].
+    "e[._]costco[._]mx",          // Costco marketing; charges arrive via banamex
+    "@github\\.com",
+    "@promocinepolis\\.com",       // promos only — NOT confirmacion-compra@
+    "@pluto\\.tv",
+    "dslaboratories\\.com\\.mx",
+    "global[._]metamail[._]com",  // Meta ad-product marketing
+    "santander\\.com\\.mx",       // account unused; unblock notificaciones@ first if that changes
   ],
   allow: [
     "notificaciones@banamex\\.com",

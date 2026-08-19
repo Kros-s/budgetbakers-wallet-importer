@@ -19,6 +19,42 @@
 import { spawn } from "child_process";
 import type { BotConfig } from "./config.js";
 
+/**
+ * Thrown when the CLI failed because the account ran out of usage budget
+ * rather than because this particular prompt was bad.
+ *
+ * The distinction matters to the batch: a per-email failure burns one of the
+ * three retry attempts for that email, so a limit hit mid-run would silently
+ * exhaust every remaining email over a few nights. Callers are expected to
+ * stop the run instead and resume in the next window.
+ */
+export class UsageLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageLimitError";
+  }
+}
+
+// The CLI has no machine-readable code for this, so we match its text. Kept
+// broad on purpose: a false positive costs one paused run (harmless, it
+// resumes), a false negative costs three retry attempts per pending email.
+const USAGE_LIMIT_PATTERNS: RegExp[] = [
+  /usage limit/i,
+  /limit reached/i,
+  /rate[ _-]?limit/i,
+  /\bquota\b/i,
+  /too many requests/i,
+  /\b429\b/,
+  /limit will reset/i,
+  /upgrade to increase/i,
+  /insufficient credit|credit balance/i,
+];
+
+export function isUsageLimitText(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return USAGE_LIMIT_PATTERNS.some((r) => r.test(text));
+}
+
 export interface ClaudeRunResult {
   /** The text Claude produced for this turn (the `result` field of json output) */
   text: string;
@@ -120,6 +156,11 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
 
   if (code !== 0) {
     const tail = stderr.trim().split("\n").slice(-5).join("\n");
+    if (isUsageLimitText(stderr) || isUsageLimitText(stdout)) {
+      throw new UsageLimitError(
+        `claude hit a usage limit (exit ${code}). Stderr tail:\n${tail || "<empty>"}`
+      );
+    }
     throw new Error(
       `claude exited with code ${code} after ${durationMs}ms. Stderr tail:\n${tail || "<empty>"}`
     );
@@ -136,6 +177,10 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
   }
 
   if (parsed.is_error) {
+    const envelopeText = parsed.error ?? parsed.result ?? "";
+    if (isUsageLimitText(envelopeText) || isUsageLimitText(parsed.subtype)) {
+      throw new UsageLimitError(`claude hit a usage limit: ${envelopeText.slice(0, 200)}`);
+    }
     return {
       text: parsed.error ?? parsed.result ?? "(unknown error)",
       costUsd: parsed.total_cost_usd ?? null,

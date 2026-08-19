@@ -36,7 +36,7 @@ import {
 } from "../batch/ledger.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { loadBotConfig } from "../bot/config.js";
-import { runClaude } from "../bot/claude-runner.js";
+import { runClaude, UsageLimitError } from "../bot/claude-runner.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
 import { deleteRecords, getRecord } from "../records.js";
@@ -271,6 +271,9 @@ async function main() {
 
   const counts = { written: 0, duplicate: 0, no_transaction: 0, pending: 0, clarification: 0, failed: 0 };
   const succeededUids: number[] = [];
+  // Set when a usage limit cuts the run short. Everything not reached stays
+  // untouched: no failed marks, no consumed attempts, watermark not advanced.
+  let paused: { done: number; total: number; reason: string } | null = null;
 
   for (let i = 0; i < toProcess.length; i++) {
     const env = toProcess[i];
@@ -300,6 +303,11 @@ async function main() {
       succeededUids.push(env.uid);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof UsageLimitError) {
+        paused = { done: i, total: toProcess.length, reason: message.slice(0, 200) };
+        console.error(`\n   ⏸ límite de uso alcanzado — pausando en ${i}/${toProcess.length}`);
+        break;
+      }
       console.error(`   ✖ falló: ${message.slice(0, 200)}`);
       markUidFailed(ledger, env.uid, message.slice(0, 500), env.from, env.subject);
       counts.failed++;
@@ -311,7 +319,7 @@ async function main() {
   if (storeUids.length > 0) saveProcessed(args.folder, uidValidity, storeUids);
 
   const exhausted = ledger.uidsFailed.filter((f) => f.attempts >= MAX_ATTEMPTS);
-  closeLedger(ledger, counts.failed === 0 ? "complete" : "failed");
+  closeLedger(ledger, paused ? "paused" : counts.failed === 0 ? "complete" : "failed");
 
   // "Pendientes totales" is the user-facing truth: everything still waiting
   // across ALL runs, not just this run's increments (which mislead after a
@@ -321,8 +329,12 @@ async function main() {
   const statementNag = overdue.length
     ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándalos con /statement o déjalos en data/statements/inbox/`
     : "";
+  const pausedNote = paused
+    ? `\n⏸ *Pausado por límite de uso* — procesados ${paused.done} de ${paused.total}. ` +
+      `Los ${paused.total - paused.done} restantes NO se marcaron como fallidos y se retoman en la siguiente ventana.\n`
+    : "";
   const summary =
-    `📦 *Batch ${localDayStr()}*\n` +
+    `📦 *Batch ${localDayStr()}*${pausedNote}\n` +
     `Ventana: ${from.toISOString().slice(0, 16)} → ${to.toISOString().slice(0, 16)}\n` +
     `✅ Escritos: ${counts.written}\n` +
     `🔁 Duplicados evitados: ${counts.duplicate}\n` +
@@ -443,6 +455,10 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
       if (line === "NO_TRANSACTION" || line.endsWith("NO_TRANSACTION")) console.log("NO_TRANSACTION");
       else console.log(`\n${line}\n`);
     } catch (err) {
+      if (err instanceof UsageLimitError) {
+        console.log(`\n⏸ límite de uso alcanzado en ${i + 1}/${toProcess.length} — corte del dry-run.`);
+        break;
+      }
       console.log(`✖ ${err instanceof Error ? err.message.slice(0, 150) : err}`);
     }
   }

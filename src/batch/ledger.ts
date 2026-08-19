@@ -36,7 +36,7 @@ export interface ClassifiedOut {
 export interface RunLedger {
   day: string;                       // local YYYY-MM-DD of the run
   window: { from: string; to: string };
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "paused";
   startedAt: string;
   finishedAt?: string;
   uidsProcessed: number[];
@@ -135,6 +135,10 @@ export function listLedgers(): RunLedger[] {
 /**
  * Watermark: end of the newest COMPLETE ledger window. Next default run
  * covers watermark → now, so downtime (Mac off, migration) self-heals.
+ *
+ * "paused" is deliberately excluded alongside "failed": a run cut short by a
+ * usage limit must not advance the watermark, so the next window re-covers it
+ * and picks up the emails it never reached.
  */
 export function latestWatermark(): Date | null {
   const complete = listLedgers().filter((l) => l.status === "complete");
@@ -171,7 +175,7 @@ export function appendRecords(ledger: RunLedger, records: LedgerRecord[]): void 
   saveLedger(ledger);
 }
 
-export function closeLedger(ledger: RunLedger, status: "complete" | "failed"): void {
+export function closeLedger(ledger: RunLedger, status: "complete" | "failed" | "paused"): void {
   ledger.status = status;
   ledger.finishedAt = new Date().toISOString();
   saveLedger(ledger);
