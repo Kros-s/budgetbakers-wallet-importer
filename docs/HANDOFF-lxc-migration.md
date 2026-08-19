@@ -53,12 +53,14 @@ pct exec 200 -- git clone -b refactor/daily-batch \
 # (repo privado: usa deploy key o https con token)
 ```
 
-### 3. Secretos (llegan por AirDrop como bbw-secrets-<fecha>.zip)
+### 3. Secretos (llegan por AirDrop como bbw-secrets-<fecha>.tar.gz.enc,
+   AES-256; la passphrase la da el usuario por otro canal)
 
 ```bash
-# Copia el zip al LXC (scp/pct push) y:
-pct push 200 bbw-secrets-*.zip /root/bbw-secrets.zip
-pct exec 200 -- bash -c "cd /opt/bbw && unzip -o /root/bbw-secrets.zip && chmod 600 .env.local && rm /root/bbw-secrets.zip"
+pct push 200 bbw-secrets-*.tar.gz.enc /root/bbw-secrets.tar.gz.enc
+pct exec 200 -- bash -c "openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:'<PASSPHRASE>' \
+  -in /root/bbw-secrets.tar.gz.enc | tar xzf - -C /opt/bbw && \
+  chmod 600 /opt/bbw/.env.local && rm /root/bbw-secrets.tar.gz.enc"
 ```
 
 ### 4. Token del Claude CLI (interactivo, lo corre el usuario)
