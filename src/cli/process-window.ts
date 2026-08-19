@@ -26,7 +26,7 @@ import { Telegraf } from "telegraf";
 
 import { loadEnvLocal } from "../env.js";
 import { buildImapClient } from "../imap/client.js";
-import { htmlToText } from "../imap/poller.js";
+import { bodyToText } from "../imap/poller.js";
 import { getProcessed, saveProcessed } from "../imap/processed-store.js";
 import { classifyEmail } from "../classifier/email-rules.js";
 import {
@@ -145,7 +145,7 @@ async function fetchWindow(folder: string, from: Date, to: Date, wantBodies: Set
 
 async function extractBody(source: Buffer): Promise<string> {
   const parsed = await PostalMime.parse(source);
-  return parsed.text?.trim() || (parsed.html ? htmlToText(parsed.html) : "");
+  return bodyToText(parsed.text, parsed.html);
 }
 
 function confirm(question: string): Promise<boolean> {

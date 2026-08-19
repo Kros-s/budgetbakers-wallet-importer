@@ -52,6 +52,9 @@ export const DEFAULT_RULES: EmailRules = {
     "dslaboratories\\.com\\.mx",
     "global[._]metamail[._]com",  // Meta ad-product marketing
     "santander\\.com\\.mx",       // account unused; unblock notificaciones@ first if that changes
+    // Meta ad receipts land here, but the ad account is not the user's — the
+    // charges are somebody else's and must not enter the ledger.
+    "business-updates\\.facebook\\.com",
   ],
   allow: [
     "notificaciones@banamex\\.com",

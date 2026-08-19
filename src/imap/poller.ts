@@ -6,8 +6,28 @@ import type { EmailDeps } from "../webhook/email-processor.js";
 import { buildImapClient } from "./client.js";
 import { getProcessed, saveProcessed } from "./processed-store.js";
 
+/**
+ * True when a string is markup rather than prose. Needed because some senders
+ * (Openbank, DolarApp) put HTML inside the text/plain MIME part, so a non-empty
+ * `parsed.text` is not proof that it is plain text — and shipping raw markup to
+ * the model both wastes tokens and degrades the verdict.
+ */
+export function looksLikeHtml(text: string): boolean {
+  return /<!DOCTYPE\s+html|<html[\s>]|<body[\s>]|<div[\s>]|<table[\s>]|<meta\s/i.test(text);
+}
+
+/** Best-effort body for the model: prefers real plain text, else flattens HTML. */
+export function bodyToText(parsedText: string | undefined, parsedHtml: string | undefined): string {
+  const text = parsedText?.trim();
+  if (text && !looksLikeHtml(text)) return text;
+  const html = parsedHtml ?? (text && looksLikeHtml(text) ? text : undefined);
+  if (html) return htmlToText(html);
+  return text ?? "";
+}
+
 export function htmlToText(html: string): string {
   return html
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, "")
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
@@ -90,7 +110,7 @@ export async function pollOnce(
     const msg = messages[i];
     try {
       const parsed = await PostalMime.parse(msg.source);
-      const text = parsed.text?.trim() || (parsed.html ? htmlToText(parsed.html) : "");
+      const text = bodyToText(parsed.text, parsed.html);
 
       if (!text) {
         console.log(`[imap] uid=${msg.uid} — empty body, skipping`);
