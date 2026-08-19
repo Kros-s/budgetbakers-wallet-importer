@@ -7,5 +7,5 @@ dist
 debug
 data
 .DS_Store
-Statements/
+/Statements/
 package-lock.json
