@@ -24,6 +24,7 @@ import { createLogger } from "../logger.js";
 
 import { loadBotConfig } from "./config.js";
 import { pruneBotLogs } from "../batch/retention.js";
+import { BOT_COMMANDS } from "./commands.js";
 import { registerHandlers } from "./handlers.js";
 
 function loadEnvLocalIntoProcess(): void {
@@ -111,6 +112,16 @@ async function main() {
     console.log("\nReceived SIGTERM, stopping bot...");
     bot.stop("SIGTERM");
   });
+
+  // Publish the "/" menu so the commands are discoverable instead of memorised.
+  try {
+    await bot.telegram.setMyCommands(BOT_COMMANDS);
+    log("Comandos publicados en Telegram", { total: BOT_COMMANDS.length });
+  } catch (err) {
+    log.error("No se pudieron publicar los comandos", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   console.log("Starting bot (long-polling)...");
   await bot.launch();

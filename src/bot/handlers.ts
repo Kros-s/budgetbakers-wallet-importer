@@ -52,6 +52,7 @@ import {
   ensureShortIds, findByShortId, rekeyClarification, takeByShortId,
 } from "../webhook/clarification-store.js";
 import { formatPendingList, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
+import { HELP_TEXT } from "./commands.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
 
@@ -471,6 +472,10 @@ export function registerHandlers(deps: HandlerDeps): void {
         `📧 *#${entry.shortId} · ${escapeMarkdown(entry.emailFrom)}*\n${entry.claudeQuestion}\n\n` +
         `_Responde con texto normal en los próximos 2 minutos. Luego /next para la siguiente, o /stop para salir._`
     );
+  });
+
+  bot.command("help", async (ctx) => {
+    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, HELP_TEXT);
   });
 
   bot.command("stop", async (ctx) => {

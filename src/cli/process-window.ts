@@ -330,7 +330,7 @@ async function main() {
   const backlog = loadPendingBacklog();
   const overdue = missingStatements();
   const statementNag = overdue.length
-    ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándalos con /statement o déjalos en data/statements/inbox/`
+    ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándame el PDF por Telegram o déjalo en data/statements/inbox/`
     : "";
   // Retention. Ledgers are pruned only after the run has closed its own, so the
   // newest one on disk is always this run's — the watermark is never at risk.
