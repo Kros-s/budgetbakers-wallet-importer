@@ -23,6 +23,7 @@ import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../c
 import { createLogger } from "../logger.js";
 
 import { loadBotConfig } from "./config.js";
+import { pruneBotLogs } from "../batch/retention.js";
 import { registerHandlers } from "./handlers.js";
 
 function loadEnvLocalIntoProcess(): void {
@@ -49,8 +50,15 @@ async function main() {
   loadEnvLocalIntoProcess();
 
   const config = loadBotConfig();
-  const logFilePath = path.resolve("data", "bot", `bot-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+  // One log file per start, so they accumulate one per restart — seven piled up
+  // on 2026-08-19 alone. Prune before opening the new one.
+  const botDataDir = path.resolve("data", "bot");
+  const pruned = pruneBotLogs(botDataDir);
+  const logFilePath = path.join(botDataDir, `bot-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
   const log = createLogger(true, logFilePath, "info");
+  if (pruned.deleted.length) {
+    log("Logs antiguos eliminados", { borrados: pruned.deleted.length, conservados: pruned.kept });
+  }
   log("Bot config loaded", {
     allowedChatIds: Array.from(config.allowedChatIds),
     downloadDir: config.downloadDir,

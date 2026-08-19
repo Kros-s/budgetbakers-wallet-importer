@@ -38,6 +38,7 @@ import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { loadBotConfig } from "../bot/config.js";
 import { runClaude, UsageLimitError } from "../bot/claude-runner.js";
 import { checkRunIntegrity, formatFindings } from "../batch/integrity.js";
+import { pruneBotLogs, pruneLedgers } from "../batch/retention.js";
 import { listClarifications } from "../webhook/clarification-store.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
@@ -331,6 +332,19 @@ async function main() {
   const statementNag = overdue.length
     ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándalos con /statement o déjalos en data/statements/inbox/`
     : "";
+  // Retention. Ledgers are pruned only after the run has closed its own, so the
+  // newest one on disk is always this run's — the watermark is never at risk.
+  try {
+    const botDataDir = path.resolve("data", "bot");
+    const logs = pruneBotLogs(botDataDir);
+    const olds = pruneLedgers(botDataDir);
+    if (logs.deleted.length || olds.deleted.length) {
+      console.log(`   🧹 retención: ${logs.deleted.length} log(s) y ${olds.deleted.length} ledger(s) eliminados`);
+    }
+  } catch (err) {
+    console.error(`   ⚠ retención no pudo correr: ${err instanceof Error ? err.message : err}`);
+  }
+
   // Structural sanity check over what this run actually wrote. A run that
   // reports "complete, 0 failed" can still hold a serious error — on
   // 2026-08-19 it held a $323,000 transfer booked as an expense.
