@@ -13,7 +13,7 @@ export interface BotCommandSpec {
 
 /** Registered with Telegram so they appear in the "/" menu. */
 export const BOT_COMMANDS: BotCommandSpec[] = [
-  { command: "pending", description: "Aclaraciones pendientes, mayores primero" },
+  { command: "pending", description: "Ver pendientes · /pending 35 para el detalle" },
   { command: "remind", description: "Reenviar las más importantes (/remind 5)" },
   { command: "next", description: "Modo guiado: una pregunta a la vez (beta)" },
   { command: "stop", description: "Salir del modo guiado" },
@@ -32,7 +32,7 @@ export const HELP_TEXT = [
   "*Aclaraciones pendientes*",
   "Cuando el batch nocturno no puede resolver un correo, te pregunta. Tres formas de contestar:",
   "",
-  "• `/pending` — la lista, mayores primero. `/pending 30` para ver más.",
+  "• `/pending` — el índice completo, mayores primero.\n• `/pending 35` — el detalle de una: la pregunta entera y el fragmento del correo.",
   "• `#35 salió de Banorte débito` — por handle, sin buscar el mensaje.",
   "• Responder al mensaje de la pregunta, como siempre.",
   "",

@@ -43,22 +43,94 @@ function oneLine(text: string, max: number): string {
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
-/** Renders the list the user reads. Plain text: handles must survive escaping. */
-export function formatPendingList(items: PendingItem[], limit = 10): string {
-  if (items.length === 0) return "✅ No hay aclaraciones pendientes.";
+/** Telegram rejects anything over 4096; leave room for Markdown wrappers. */
+const CHUNK_LIMIT = 3500;
+
+/** Splits a body of lines into messages that Telegram will accept. */
+export function chunkLines(lines: string[], limit = CHUNK_LIMIT): string[] {
+  const out: string[] = [];
+  let current = "";
+  for (const line of lines) {
+    if (current && current.length + line.length + 1 > limit) {
+      out.push(current);
+      current = "";
+    }
+    current = current ? `${current}\n${line}` : line;
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+/** Strips markup and collapses whitespace — stored bodies can still be HTML. */
+export function plainExcerpt(text: string, max: number): string {
+  const flat = text
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, " ")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#?\w+;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
+const shortSender = (from: string) =>
+  from.replace(/_at_/, "@").split("@")[0].slice(0, 20);
+
+/**
+ * One line per question, all of them.
+ *
+ * The previous listing truncated each question to a fragment and still only
+ * showed ten, so it managed to be both unreadable and incomplete. This one is
+ * an index: enough to choose, never enough to answer. `/pending <handle>` is
+ * where the detail lives.
+ */
+export function formatPendingIndex(items: PendingItem[]): string[] {
+  if (items.length === 0) return ["✅ No hay aclaraciones pendientes."];
   const sorted = sortByImportance(items);
-  const shown = sorted.slice(0, limit);
-  const lines = shown.map(({ entry }) => {
-    const cents = questionAmountCents(entry);
-    const amount = cents > 0 ? money(cents).padStart(13) : "".padStart(13);
-    return `#${entry.shortId ?? "?"} ${amount}  ${oneLine(entry.claudeQuestion, 68)}`;
-  });
-  const header = `📋 ${items.length} pendiente${items.length === 1 ? "" : "s"}` +
-    (items.length > shown.length ? ` · mostrando ${shown.length}, mayores primero` : "");
-  const footer = items.length > shown.length
-    ? `\n\n…y ${items.length - shown.length} más · /pending ${Math.min(items.length, limit + 20)} para ver más`
-    : "";
-  return `${header}\n\n${lines.join("\n\n")}${footer}\n\nResponde así: #${shown[0].entry.shortId ?? 1} tu respuesta`;
+  const withAmount = sorted.filter((i) => questionAmountCents(i.entry) > 0);
+  const without = sorted.filter((i) => questionAmountCents(i.entry) === 0);
+
+  const lines: string[] = [`📋 *${items.length} pendientes*`, ""];
+  if (withAmount.length) {
+    lines.push(`*Con monto* (${withAmount.length})`);
+    for (const { entry } of withAmount) {
+      const amount = money(questionAmountCents(entry)).padStart(12);
+      lines.push(`\`#${String(entry.shortId).padEnd(3)}\` ${amount}  ${oneLine(entry.emailSubject || shortSender(entry.emailFrom), 34)}`);
+    }
+    lines.push("");
+  }
+  if (without.length) {
+    lines.push(`*Categorización* (${without.length})`);
+    for (const { entry } of without) {
+      lines.push(`\`#${String(entry.shortId).padEnd(3)}\` ${oneLine(entry.claudeQuestion, 52)}`);
+    }
+    lines.push("");
+  }
+  lines.push("`/pending 35` para el detalle de una · `#35 tu respuesta` para contestarla");
+  return chunkLines(lines);
+}
+
+/** Everything needed to answer one question without leaving the chat. */
+export function formatPendingDetail(item: PendingItem): string {
+  const { entry } = item;
+  const cents = questionAmountCents(entry);
+  const when = entry.createdAt ? new Date(entry.createdAt).toISOString().slice(0, 10) : "?";
+  return [
+    `📧 *#${entry.shortId}*${cents > 0 ? ` · *${money(cents)}*` : ""}`,
+    "",
+    `De: ${shortSender(entry.emailFrom)}`,
+    `Asunto: ${oneLine(entry.emailSubject, 80)}`,
+    `En cola desde: ${when}`,
+    "",
+    `*Pregunta*`,
+    entry.claudeQuestion.trim(),
+    "",
+    `*Del correo*`,
+    plainExcerpt(entry.emailText, 700),
+    "",
+    `Contesta con \`#${entry.shortId} tu respuesta\``,
+  ].join("\n");
 }
 
 export interface ParsedAnswer {

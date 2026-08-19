@@ -51,7 +51,7 @@ import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "../webhoo
 import {
   ensureShortIds, findByShortId, rekeyClarification, takeByShortId,
 } from "../webhook/clarification-store.js";
-import { formatPendingList, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
+import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
@@ -429,9 +429,23 @@ export function registerHandlers(deps: HandlerDeps): void {
   // handle, sin buscar nada en el historial.
 
   bot.command("pending", async (ctx) => {
-    const limit = Number(ctx.message.text.split(/\s+/)[1]) || 10;
+    const arg = ctx.message.text.split(/\s+/)[1]?.replace(/^#/, "");
     const items = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
-    await ctx.reply(formatPendingList(items, Math.min(Math.max(limit, 1), 50)));
+
+    // `/pending 35` asks for one question in full; `/pending` is the index.
+    if (arg && /^\d+$/.test(arg)) {
+      const one = items.find((i) => i.entry.shortId === Number(arg));
+      await sendSafeMessage(
+        deps.bot.telegram,
+        ctx.chat.id,
+        one ? formatPendingDetail(one) : `No hay pendiente #${arg}. Usa /pending para ver la lista.`
+      );
+      return;
+    }
+
+    for (const chunk of formatPendingIndex(items)) {
+      await sendSafeMessage(deps.bot.telegram, ctx.chat.id, chunk);
+    }
   });
 
   bot.command("remind", async (ctx) => {

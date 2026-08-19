@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  formatPendingList, looksLikeHandleAnswer, parseAnswers,
-  questionAmountCents, sortByImportance,
+  chunkLines, formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer,
+  parseAnswers, plainExcerpt, questionAmountCents, sortByImportance,
 } from "../../bot/pending-view.js";
 import type { PendingItem } from "../../bot/pending-view.js";
 
@@ -35,26 +35,54 @@ test("questions without an amount fall back to oldest first", () => {
   assert.deepEqual(sortByImportance(items).map((i) => i.entry.shortId), [2, 1]);
 });
 
-test("the list shows handles, amounts and a worked example", () => {
-  const out = formatPendingList([
-    item(7, "¿De dónde viene la transferencia de $33,750?"),
-    item(9, "¿Qué categoría para HIDROCAR?"),
-  ]);
-  assert.match(out, /#7/);
-  assert.match(out, /33,750\.00/);
-  assert.match(out, /Responde así: #7/);
+test("the index lists every question, not a truncated ten", () => {
+  const many = Array.from({ length: 40 }, (_, i) => item(i + 1, `¿pregunta ${i}?`, i));
+  const out = formatPendingIndex(many).join("\n");
+  assert.match(out, /40 pendientes/);
+  for (const n of [1, 20, 40]) assert.match(out, new RegExp(`#${n}\\b`), `falta #${n}`);
 });
 
-test("a long queue is truncated and says how to see the rest", () => {
-  const many = Array.from({ length: 42 }, (_, i) => item(i + 1, `pregunta ${i}`, i));
-  const out = formatPendingList(many, 10);
-  assert.match(out, /42 pendientes/);
-  assert.match(out, /y 32 más/);
-  assert.match(out, /\/pending 30/);
+test("the index separates questions that name money from plain categorisation", () => {
+  const out = formatPendingIndex([
+    item(1, "¿De dónde vienen los $33,750?"),
+    item(2, "¿Qué categoría para HIDROCAR?"),
+  ]).join("\n");
+  assert.match(out, /Con monto/);
+  assert.match(out, /Categorización/);
+  assert.match(out, /33,750\.00/);
+});
+
+test("the index is split into messages Telegram will accept", () => {
+  const many = Array.from({ length: 400 }, (_, i) => item(i + 1, `¿pregunta larguísima número ${i} con bastante texto?`, i));
+  for (const chunk of formatPendingIndex(many)) {
+    assert.ok(chunk.length <= 3500, `chunk de ${chunk.length} caracteres`);
+  }
 });
 
 test("an empty queue says so", () => {
-  assert.match(formatPendingList([]), /No hay aclaraciones pendientes/);
+  assert.match(formatPendingIndex([]).join("\n"), /No hay aclaraciones pendientes/);
+});
+
+test("the detail carries the full question and part of the email", () => {
+  const it = item(35, "¿De dónde viene esta transferencia de $33,750? Necesito la cuenta de origen.");
+  it.entry.emailText = "Banorte te informa: recibiste $33,750.00 el 15 de agosto en la cuenta ****5933.";
+  it.entry.emailSubject = "Transferencia SPEI";
+  const out = formatPendingDetail(it);
+  assert.match(out, /#35/);
+  assert.match(out, /33,750\.00/);
+  assert.match(out, /Necesito la cuenta de origen/);   // pregunta completa, no truncada
+  assert.match(out, /cuenta \*\*\*\*5933/);             // contexto del correo
+  assert.match(out, /#35 tu respuesta/);
+});
+
+test("HTML in a stored body never reaches the user", () => {
+  assert.equal(plainExcerpt("<html><head><style>a{}</style></head><body><p>Total $248</p></body></html>", 200), "Total $248");
+});
+
+test("chunkLines never splits a line in half", () => {
+  const lines = ["aaaa", "bbbb", "cccc"];
+  const chunks = chunkLines(lines, 10);
+  assert.ok(chunks.every((c) => c.split("\n").every((l) => lines.includes(l))));
 });
 
 test("parses one answer and several at once", () => {
