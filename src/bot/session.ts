@@ -4,6 +4,14 @@ import { join } from "path";
 import type { CsvRow } from "../csv.js";
 
 export interface PendingProposal {
+  /**
+   * The clarification this proposal answers, when it came from one.
+   *
+   * The question stays in the queue until the proposal is confirmed or
+   * cancelled — a proposal awaiting a button is not a resolved movement, and
+   * dropping it there is how a $6,150 purchase left the queue unrecorded.
+   */
+  clarificationShortId?: number;
   rows: CsvRow[];
   summary: string;
   createdAt: number;

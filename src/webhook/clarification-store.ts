@@ -195,6 +195,37 @@ export function findByShortId(shortId: number): { messageId: number; entry: Clar
   return null;
 }
 
+/** Peeks by Telegram message id, following the aliases. Does not remove. */
+export function findByMessageId(messageId: number): { messageId: number; entry: ClarificationEntry } | null {
+  const store = load();
+  const direct = store[String(messageId)];
+  if (direct) return { messageId, entry: direct };
+  for (const [k, entry] of Object.entries(store)) {
+    if (entry.aliasMessageIds?.includes(messageId)) return { messageId: Number(k), entry };
+  }
+  return null;
+}
+
+/**
+ * Replaces the question text, keeping the entry in the queue.
+ *
+ * Used when answering produced another question rather than a record: the
+ * movement is still unresolved, so it must stay in the queue — with the newest
+ * question, not the one the user already answered.
+ */
+export function updateClarificationQuestion(shortId: number, question: string): void {
+  withLock(() => {
+    const store = load();
+    for (const entry of Object.values(store)) {
+      if (entry.shortId === shortId) {
+        entry.claudeQuestion = question;
+        save(store);
+        return;
+      }
+    }
+  });
+}
+
 /** Removes and returns the clarification with this handle. */
 export function takeByShortId(shortId: number): ClarificationEntry | null {
   return withLock(() => {

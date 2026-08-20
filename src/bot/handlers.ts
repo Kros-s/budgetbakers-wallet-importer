@@ -49,7 +49,8 @@ import {
 import { EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
 import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "../webhook/learned-rules.js";
 import {
-  ensureShortIds, findByShortId, linkMessageId, takeByShortId,
+  ensureShortIds, findByMessageId, findByShortId, linkMessageId, takeByShortId,
+  updateClarificationQuestion,
 } from "../webhook/clarification-store.js";
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
@@ -194,7 +195,10 @@ async function processUserTurn(
   ctx: Context,
   session: BotSession,
   prompt: string,
-  systemPrompt: string = SYSTEM_PROMPT
+  systemPrompt: string = SYSTEM_PROMPT,
+  /** Set when this turn is answering a clarification, so it can be kept or
+   *  dropped according to how the turn ends. */
+  clarificationShortId?: number
 ): Promise<void> {
   const { config, log } = deps;
   let activeSession = session;
@@ -293,6 +297,7 @@ async function processUserTurn(
       rows,
       summary: cleanedText,
       createdAt: Date.now(),
+      clarificationShortId,
     });
 
     const queueLen = session.pendingQueue.length;
@@ -309,6 +314,14 @@ async function processUserTurn(
       ])
     );
     setPendingMessageId(session.chatId, sent.message_id);
+    return;
+  }
+
+  // No CSV: the movement is still unresolved, so the question stays in the
+  // queue — updated to whatever is being asked now.
+  if (clarificationShortId !== undefined && cleanedText.trim()) {
+    updateClarificationQuestion(clarificationShortId, cleanedText.trim());
+    await sendLong(ctx, `${cleanedText}${ruleNote}\n\n_Sigue pendiente como #${clarificationShortId}._`);
     return;
   }
 
@@ -397,6 +410,14 @@ async function commitPending(
   let msg = `✅ ${ok} registro${ok === 1 ? "" : "s"} escrito${ok === 1 ? "" : "s"}.`;
   if (fail > 0) msg += `\n❌ ${fail} fallaron en CouchDB.`;
   if (skipped.length > 0) msg += `\n⏭️ ${skipped.length} omitidos:\n${skippedReasons}`;
+
+  // The movement is finally recorded, so the question can leave the queue.
+  // Only on a clean write: if anything was skipped it is still unresolved.
+  if (pending.clarificationShortId !== undefined && ok > 0 && skipped.length === 0) {
+    if (takeByShortId(pending.clarificationShortId)) {
+      msg += `\n📋 #${pending.clarificationShortId} resuelta y fuera de la cola.`;
+    }
+  }
   await ctx.reply(msg);
 
   if (skipped.length > 0) {
@@ -664,7 +685,17 @@ export function registerHandlers(deps: HandlerDeps): void {
     const messageId = ctx.callbackQuery.message?.message_id;
     const taken = takePending(ctx.chat!.id, messageId);
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-    await ctx.reply(taken ? "🗑️ Propuesta descartada." : "Nada pendiente que cancelar.");
+    if (!taken) {
+      await ctx.reply("Nada pendiente que cancelar.");
+      return;
+    }
+    // Cancelling is a decision too: the user has judged this movement, so the
+    // question goes as well rather than coming back tomorrow.
+    let note = "";
+    if (taken.clarificationShortId !== undefined && takeByShortId(taken.clarificationShortId)) {
+      note = `\n📋 #${taken.clarificationShortId} también sale de la cola.`;
+    }
+    await ctx.reply(`🗑️ Propuesta descartada.${note}`);
   });
 
   bot.on(message("text"), async (ctx) => {
@@ -694,21 +725,24 @@ export function registerHandlers(deps: HandlerDeps): void {
       for (const { shortId, answer } of answers) {
         // Capture the Telegram id first: on failure the question goes back
         // under its own key, so reply-to keeps working on the original message.
+        // Peek, never take: the question leaves the queue only once a record is
+        // written or the user cancels. Answering is not by itself a resolution.
         const found = findByShortId(shortId);
-        const entry = found ? takeByShortId(shortId) : null;
-        if (!entry || !found) {
+        if (!found) {
           missing.push(shortId);
           continue;
         }
         try {
           await replySafe(ctx, `📧 #${shortId} · procesando tu respuesta…`);
-          await processUserTurn(deps, ctx, session, await buildClarificationPrompt(deps, entry, answer), EMAIL_SYSTEM_PROMPT);
+          await processUserTurn(
+            deps, ctx, session,
+            await buildClarificationPrompt(deps, found.entry, answer),
+            EMAIL_SYSTEM_PROMPT, shortId
+          );
           handled++;
         } catch (err) {
-          // Never let an answer vanish: put the question back so it can be retried.
-          storeClarification(found.messageId, entry);
           log.error("Handle answer failed", { shortId, error: err instanceof Error ? err.message : String(err) });
-          await ctx.reply(`❌ #${shortId} falló: ${err instanceof Error ? err.message : String(err)}`);
+          await ctx.reply(`❌ #${shortId} falló: ${err instanceof Error ? err.message : String(err)}. Sigue pendiente.`);
         }
       }
       if (missing.length) {
@@ -726,16 +760,18 @@ export function registerHandlers(deps: HandlerDeps): void {
     const guided = activeQuestion(ctx.chat.id);
     if (guided !== null) {
       const found = findByShortId(guided);
-      const entry = found ? takeByShortId(guided) : null;
-      if (entry && found) {
+      if (found) {
         stopGuided(ctx.chat.id);
         try {
           await replySafe(ctx, `📧 #${guided} · procesando tu respuesta…`);
-          await processUserTurn(deps, ctx, session, await buildClarificationPrompt(deps, entry, text), EMAIL_SYSTEM_PROMPT);
+          await processUserTurn(
+            deps, ctx, session,
+            await buildClarificationPrompt(deps, found.entry, text),
+            EMAIL_SYSTEM_PROMPT, guided
+          );
           await ctx.reply("Siguiente con /next, o /stop para salir.");
         } catch (err) {
-          storeClarification(found.messageId, entry);
-          await ctx.reply(`❌ Falló: ${err instanceof Error ? err.message : String(err)}`);
+          await ctx.reply(`❌ Falló: ${err instanceof Error ? err.message : String(err)}. Sigue pendiente.`);
         }
         return;
       }
@@ -747,22 +783,23 @@ export function registerHandlers(deps: HandlerDeps): void {
     }
 
     // Only resolve a clarification via explicit reply-to — never auto-consume free text.
-    const clarification = replyToId ? takeClarification(replyToId) : null;
+    const found = replyToId ? findByMessageId(replyToId) : null;
 
-    if (clarification) {
+    if (found) {
       try {
-        await replySafe(ctx, `📧 Procesando tu respuesta sobre el correo de _${escapeMarkdown(clarification.emailFrom)}_…`);
-        await processUserTurn(deps, ctx, session, await buildClarificationPrompt(deps, clarification, text), EMAIL_SYSTEM_PROMPT);
+        await replySafe(ctx, `📧 Procesando tu respuesta sobre el correo de _${escapeMarkdown(found.entry.emailFrom)}_…`);
+        await processUserTurn(
+          deps, ctx, session,
+          await buildClarificationPrompt(deps, found.entry, text),
+          EMAIL_SYSTEM_PROMPT, found.entry.shortId
+        );
       } catch (err) {
-        // Don't let the user's reply vanish — put the clarification back so they
-        // can retry by replying to the same message.
-        storeClarification(replyToId!, clarification);
         log.error("Clarification handling failed", {
           error: err instanceof Error ? err.message : String(err),
         });
         await ctx.reply(
           `❌ Error procesando tu respuesta: ${err instanceof Error ? err.message : String(err)}\n\n` +
-            `Puedes responder de nuevo al mismo mensaje para reintentar.`
+            `Sigue pendiente; puedes responder de nuevo al mismo mensaje.`
         );
       }
       return;

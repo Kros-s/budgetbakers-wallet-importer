@@ -93,3 +93,26 @@ test("an unrelated message id resolves nothing", () => {
   assert.equal(takeClarification(12345), null);
   assert.ok(takeClarification(700));
 });
+
+test("a question can be re-asked without leaving the queue", async () => {
+  const { updateClarificationQuestion, findByShortId, ensureShortIds } =
+    await import("../../webhook/clarification-store.js");
+  storeClarification(800, entry(Date.now(), "compra Santillana"));
+  const [{ entry: stored }] = ensureShortIds();
+  // Answering produced another question, not a record: the movement is still
+  // unresolved, so it stays — with the newer question.
+  updateClarificationQuestion(stored.shortId!, "¿La tarjeta 432 es la Costco o la VISA 5432?");
+  const again = findByShortId(stored.shortId!);
+  assert.ok(again, "la pregunta salió de la cola al repreguntar");
+  assert.match(again.entry.claudeQuestion, /VISA 5432/);
+  assert.equal(again.entry.emailSubject, "compra Santillana", "perdió el contexto del correo");
+});
+
+test("updating an unknown handle changes nothing", async () => {
+  const { updateClarificationQuestion, listClarifications } =
+    await import("../../webhook/clarification-store.js");
+  storeClarification(810, entry(Date.now(), "x"));
+  updateClarificationQuestion(99999, "no debería aplicarse");
+  assert.equal(listClarifications().length, 1);
+  assert.doesNotMatch(listClarifications()[0].entry.claudeQuestion, /no debería/);
+});
