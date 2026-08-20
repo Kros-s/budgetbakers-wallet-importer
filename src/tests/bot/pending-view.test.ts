@@ -119,3 +119,24 @@ test("free text is never mistaken for a handle answer", () => {
   assert.equal(looksLikeHandleAnswer("#7 Groceries"), true);
   assert.equal(looksLikeHandleAnswer("  #7 Groceries"), true);
 });
+
+test("/remind and /pending <handle> render the same way", () => {
+  // They drifted apart once: /remind kept a plain template with no amount, no
+  // dot and no extracted facts, so the redesign appeared not to have landed.
+  const it = item(14, "¿Con qué cuenta pagaste la compra de $379.00?");
+  it.entry.emailText = "Cinépolis. Total $379.00 el 02/08/2026 con tarjeta ****5432.";
+  it.entry.emailSubject = "Confirmación de compra";
+  const full = formatPendingDetail(it);
+  const compact = formatPendingDetail(it, { excerpt: false });
+  for (const out of [full, compact]) {
+    assert.match(out, /#14/);
+    assert.match(out, /379\.00/);
+    assert.match(out, /🏦/);
+    assert.match(out, /💳.*5432/);      // los datos extraídos, en ambas
+    assert.match(out, /Lo que falta/);
+  }
+  // The compact one drops only the raw excerpt.
+  assert.match(full, /Texto del correo/);
+  assert.doesNotMatch(compact, /Texto del correo/);
+  assert.ok(compact.length < full.length);
+});

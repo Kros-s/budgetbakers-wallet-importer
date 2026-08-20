@@ -527,17 +527,16 @@ export function registerHandlers(deps: HandlerDeps): void {
     }
     const batch = items.slice(0, count);
     await ctx.reply(`🔔 Reenviando ${batch.length} de ${items.length}, mayores primero.`);
-    for (const { messageId, entry } of batch) {
+    for (const item of batch) {
+      // Same template as /pending <handle>, minus the raw excerpt: five full
+      // excerpts in a row would bury the questions they are meant to surface.
       const sent = await sendSafeMessage(
         deps.bot.telegram,
         ctx.chat.id,
-        `📧 *#${entry.shortId} · ${escapeMarkdown(senderInstitution(entry.emailFrom))}*\n\n` +
-          `Asunto: ${escapeMarkdown(entry.emailSubject)}\n\n${entry.claudeQuestion}\n\n` +
-          `_↩️ Responde a este mensaje, o escribe \`#${entry.shortId} tu respuesta\`._`
+        formatPendingDetail(item, { excerpt: false })
       );
       // Link rather than move: the original message keeps working too.
-      void messageId;
-      linkMessageId(entry.shortId!, sent.message_id);
+      linkMessageId(item.entry.shortId!, sent.message_id);
     }
   });
 

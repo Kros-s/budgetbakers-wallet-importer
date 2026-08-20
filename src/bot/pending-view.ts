@@ -116,8 +116,14 @@ export function formatPendingIndex(items: PendingItem[]): string[] {
   return chunkLines(lines);
 }
 
+export interface DetailOptions {
+  /** Include the raw email excerpt. Off for /remind, which sends several. */
+  excerpt?: boolean;
+}
+
 /** Everything needed to answer one question without leaving the chat. */
-export function formatPendingDetail(item: PendingItem): string {
+export function formatPendingDetail(item: PendingItem, opts: DetailOptions = {}): string {
+  const withExcerpt = opts.excerpt ?? true;
   const { entry } = item;
   const cents = questionAmountCents(entry);
   const when = entry.createdAt ? new Date(entry.createdAt).toISOString().slice(0, 10) : "?";
@@ -135,13 +141,9 @@ export function formatPendingDetail(item: PendingItem): string {
     `🕐 En cola desde ${when}`
   );
   if (facts.length) out.push("", "*Datos del correo*", ...facts);
+  out.push("", "❓ *Lo que falta*", entry.claudeQuestion.trim());
+  if (withExcerpt) out.push("", "📄 *Texto del correo*", plainExcerpt(entry.emailText, 700));
   out.push(
-    "",
-    "❓ *Lo que falta*",
-    entry.claudeQuestion.trim(),
-    "",
-    "📄 *Texto del correo*",
-    plainExcerpt(entry.emailText, 700),
     "",
     `↩️ Contesta \`#${entry.shortId} tu respuesta\`, o responde a este mensaje — también con foto o PDF.`
   );
