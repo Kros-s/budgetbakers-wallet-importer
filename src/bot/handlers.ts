@@ -53,6 +53,7 @@ import {
 } from "../webhook/clarification-store.js";
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
+import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
 
@@ -149,13 +150,34 @@ async function sendLong(ctx: Context, text: string): Promise<void> {
   }
 }
 
-function buildClarificationPrompt(c: ClarificationEntry, userReply: string): string {
+async function buildClarificationPrompt(
+  deps: HandlerDeps,
+  c: ClarificationEntry,
+  userReply: string
+): Promise<string> {
   const body = c.emailText.length > 3000 ? c.emailText.slice(0, 3000) + "\n…(truncado)" : c.emailText;
   const learnedRules = getLearnedRules();
   const rulesSection = learnedRules
     ? `Reglas aprendidas del usuario (respétalas SIEMPRE):\n${learnedRules}\n\n`
     : "";
+  // "¿Ya está registrado?" is a question the model cannot answer on its own and
+  // should never have to guess at, so the matching records travel with the ask.
+  let walletSection = "";
+  try {
+    const amounts = candidateAmounts(c.emailText, c.claudeQuestion, userReply);
+    const namesById: Record<string, string> = {};
+    for (const [name, id] of Object.entries(deps.lookup.accounts)) namesById[id] = name;
+    walletSection = formatWalletContext(
+      await findExistingByAmount(deps.couch, amounts, namesById),
+      amounts
+    );
+  } catch (err) {
+    deps.log.error("No se pudo consultar Wallet para el contexto", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   return (
+    walletSection +
     `${rulesSection}Contexto: Se analizó el siguiente correo bancario:\n\n` +
     `De: ${c.emailFrom}\nAsunto: ${c.emailSubject}\n---\n${body}\n---\n\n` +
     `Tu pregunta anterior fue: "${c.claudeQuestion}"\n\n` +
@@ -680,7 +702,7 @@ export function registerHandlers(deps: HandlerDeps): void {
         }
         try {
           await replySafe(ctx, `📧 #${shortId} · procesando tu respuesta…`);
-          await processUserTurn(deps, ctx, session, buildClarificationPrompt(entry, answer), EMAIL_SYSTEM_PROMPT);
+          await processUserTurn(deps, ctx, session, await buildClarificationPrompt(deps, entry, answer), EMAIL_SYSTEM_PROMPT);
           handled++;
         } catch (err) {
           // Never let an answer vanish: put the question back so it can be retried.
@@ -709,7 +731,7 @@ export function registerHandlers(deps: HandlerDeps): void {
         stopGuided(ctx.chat.id);
         try {
           await replySafe(ctx, `📧 #${guided} · procesando tu respuesta…`);
-          await processUserTurn(deps, ctx, session, buildClarificationPrompt(entry, text), EMAIL_SYSTEM_PROMPT);
+          await processUserTurn(deps, ctx, session, await buildClarificationPrompt(deps, entry, text), EMAIL_SYSTEM_PROMPT);
           await ctx.reply("Siguiente con /next, o /stop para salir.");
         } catch (err) {
           storeClarification(found.messageId, entry);
@@ -730,7 +752,7 @@ export function registerHandlers(deps: HandlerDeps): void {
     if (clarification) {
       try {
         await replySafe(ctx, `📧 Procesando tu respuesta sobre el correo de _${escapeMarkdown(clarification.emailFrom)}_…`);
-        await processUserTurn(deps, ctx, session, buildClarificationPrompt(clarification, text), EMAIL_SYSTEM_PROMPT);
+        await processUserTurn(deps, ctx, session, await buildClarificationPrompt(deps, clarification, text), EMAIL_SYSTEM_PROMPT);
       } catch (err) {
         // Don't let the user's reply vanish — put the clarification back so they
         // can retry by replying to the same message.
