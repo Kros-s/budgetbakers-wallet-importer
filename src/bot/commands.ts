@@ -19,6 +19,7 @@ export const BOT_COMMANDS: BotCommandSpec[] = [
   { command: "stop", description: "Salir del modo guiado" },
   { command: "cancel", description: "Descartar la propuesta pendiente" },
   { command: "reset", description: "Empezar una conversación nueva" },
+  { command: "audit", description: "Cerrar pendientes que ya están en Wallet" },
   { command: "ignore", description: "Ignorar correos por asunto (/ignore texto)" },
   { command: "help", description: "Cómo usar el bot" },
 ];
@@ -51,6 +52,9 @@ export const HELP_TEXT = [
   "• `/next` — modo guiado (beta): una pregunta a la vez, contestas con texto normal. La ventana dura 2 minutos; después de eso lo que escribas cuenta como mensaje nuevo. `/stop` para salir.",
   "• `/cancel` — descarta la propuesta que esté esperando confirmación.",
   "• `/reset` — arranca conversación nueva si el bot se atoró.",
+  "",
+  "*Conciliar la cola*",
+  "`/audit` revisa cada pendiente contra Wallet y cierra las que ya están registradas. Las dudosas te las lista sin tocarlas.",
   "",
   "*Ignorar avisos que no son movimientos*",
   "`/ignore cambio de politica de reinversion` — deja de preguntarte por esos correos y quita de la cola los que ya coincidan.",

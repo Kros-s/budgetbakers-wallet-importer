@@ -55,8 +55,9 @@ import {
 } from "../webhook/clarification-store.js";
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, questionAmountCents, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
-import { senderInstitution } from "./email-facts.js";
+import { movementDate, senderInstitution } from "./email-facts.js";
 import { addIgnorePattern, listIgnorePatterns, matchesPattern } from "../webhook/ignore-rules.js";
+import { formatVerdict, judge } from "../webhook/pending-audit.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
@@ -654,6 +655,51 @@ export function registerHandlers(deps: HandlerDeps): void {
         `_Responde con texto normal en los próximos 2 minutos, o responde a este mensaje cuando quieras. Luego /next para la siguiente, o /stop para salir._`
     );
     linkMessageId(entry.shortId!, prompt.message_id);
+  });
+
+  bot.command("audit", async (ctx) => {
+    const items = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
+    if (items.length === 0) {
+      await ctx.reply("✅ No hay aclaraciones pendientes.");
+      return;
+    }
+    await ctx.reply(`🔍 Revisando ${items.length} pendientes contra Wallet…`);
+
+    const namesById: Record<string, string> = {};
+    for (const [name, id] of Object.entries(deps.lookup.accounts)) namesById[id] = name;
+
+    const resolved: string[] = [];
+    const doubtful: string[] = [];
+    for (const { entry } of items) {
+      const cents = questionAmountCents(entry);
+      if (!cents) continue;
+      const matches = await findExistingByAmount(deps.couch, [cents], namesById);
+      if (matches.length === 0) continue;
+      const verdict = judge({
+        shortId: entry.shortId!, amountCents: cents,
+        movementDate: movementDate(entry.emailText), matches,
+      });
+      if (verdict.resolved) {
+        takeByShortId(entry.shortId!);
+        resolved.push(formatVerdict(verdict));
+      } else {
+        doubtful.push(formatVerdict(verdict));
+      }
+    }
+
+    if (resolved.length === 0 && doubtful.length === 0) {
+      await ctx.reply("Nada que conciliar: ninguna pendiente coincide con un registro existente.");
+      return;
+    }
+    let msg = "";
+    if (resolved.length) {
+      msg += `*Ya registradas — las cerré (${resolved.length})*\n${resolved.join("\n")}\n\n`;
+    }
+    if (doubtful.length) {
+      // Never closed on a guess: a wrong close hides a real movement for good.
+      msg += `*Parecidas, pero no las cierro (${doubtful.length})*\n${doubtful.join("\n")}\n\n_Revísalas con \`/pending N\`._`;
+    }
+    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, msg);
   });
 
   bot.command("ignore", async (ctx) => {
