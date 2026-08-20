@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily state snapshot at 19:00, an hour before the batch runs
+
+[Timer]
+OnCalendar=*-*-* 19:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

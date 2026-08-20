@@ -1,0 +1,7 @@
+[Unit]
+Description=BudgetBakers importer — snapshot of the state that cannot be regenerated
+
+[Service]
+Type=oneshot
+Environment=TZ=America/Mexico_City
+ExecStart=/bin/bash /opt/bbw/scripts/deploy/backup-state.sh

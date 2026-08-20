@@ -69,7 +69,7 @@ fi
 echo "── Unidades systemd"
 cp "$UNIT_SRC"/bbw-*.service "$UNIT_SRC"/bbw-*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now bbw-daily.timer bbw-remind.timer
+systemctl enable --now bbw-daily.timer bbw-remind.timer bbw-backup.timer
 systemctl enable bbw-bot.service   # started manually the first time: systemctl start bbw-bot
 
 echo
