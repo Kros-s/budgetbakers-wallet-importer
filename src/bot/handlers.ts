@@ -151,6 +151,30 @@ async function sendLong(ctx: Context, text: string): Promise<void> {
   }
 }
 
+/**
+ * Which pending question, if any, this message is answering.
+ *
+ * Attachments were text-only until now: a photo replying to a question landed
+ * in the photo handler, which knew nothing about the queue, so it was read as a
+ * brand new expense. Both routes are accepted — a reply to any message showing
+ * the question, or a `#35` at the start of the caption.
+ */
+function clarificationTarget(
+  replyToId: number | undefined,
+  caption: string
+): { found: { messageId: number; entry: ClarificationEntry }; text: string } | null {
+  const byHandle = /^#(\d+)\s*([\s\S]*)$/.exec(caption.trim());
+  if (byHandle) {
+    const found = findByShortId(Number(byHandle[1]));
+    if (found) return { found, text: byHandle[2].trim() };
+  }
+  if (replyToId !== undefined) {
+    const found = findByMessageId(replyToId);
+    if (found) return { found, text: caption };
+  }
+  return null;
+}
+
 async function buildClarificationPrompt(
   deps: HandlerDeps,
   c: ClarificationEntry,
@@ -562,6 +586,24 @@ export function registerHandlers(deps: HandlerDeps): void {
       });
 
       const caption = ctx.message.caption?.trim() ?? "";
+
+      // A photo can be the answer to a pending question — a receipt, a
+      // screenshot of the statement — not only a new expense.
+      const target = clarificationTarget(ctx.message.reply_to_message?.message_id, caption);
+      if (target) {
+        const reply =
+          `${target.text || "(el usuario respondió con una imagen)"}\n\n` +
+          `Imagen adjunta guardada en: ${downloaded.localPath}\n` +
+          `Léela con Read para obtener los datos que faltaban.`;
+        await replySafe(ctx, `📧 #${target.found.entry.shortId} · procesando tu imagen…`);
+        await processUserTurn(
+          deps, ctx, session,
+          await buildClarificationPrompt(deps, target.found.entry, reply),
+          EMAIL_SYSTEM_PROMPT, target.found.entry.shortId
+        );
+        return;
+      }
+
       const prompt =
         `El usuario envió una foto en Telegram. Está guardada localmente en:\n${downloaded.localPath}\n\n` +
         (caption ? `Caption del usuario: "${caption}"\n\n` : "") +
@@ -597,6 +639,22 @@ export function registerHandlers(deps: HandlerDeps): void {
       });
 
       const caption = ctx.message.caption?.trim() ?? "";
+
+      const target = clarificationTarget(ctx.message.reply_to_message?.message_id, caption);
+      if (target) {
+        const reply =
+          `${target.text || "(el usuario respondió con un documento)"}\n\n` +
+          `Documento adjunto guardado en: ${downloaded.localPath}\n` +
+          `Léelo con Read (pasa pages si es un PDF grande) para obtener los datos que faltaban.`;
+        await replySafe(ctx, `📧 #${target.found.entry.shortId} · procesando tu documento…`);
+        await processUserTurn(
+          deps, ctx, session,
+          await buildClarificationPrompt(deps, target.found.entry, reply),
+          EMAIL_SYSTEM_PROMPT, target.found.entry.shortId
+        );
+        return;
+      }
+
       const prompt =
         `El usuario envió un documento en Telegram (${doc.mime_type ?? "tipo desconocido"}, ${
           downloaded.sizeBytes
@@ -653,6 +711,17 @@ export function registerHandlers(deps: HandlerDeps): void {
       if (!transcript) {
         await ctx.reply(
           "⚠️ No encontré texto en el audio. Intenta de nuevo o escribe el gasto."
+        );
+        return;
+      }
+
+      const target = clarificationTarget(ctx.message.reply_to_message?.message_id, transcript);
+      if (target) {
+        await replySafe(ctx, `📧 #${target.found.entry.shortId} · procesando tu nota de voz…`);
+        await processUserTurn(
+          deps, ctx, session,
+          await buildClarificationPrompt(deps, target.found.entry, target.text || transcript),
+          EMAIL_SYSTEM_PROMPT, target.found.entry.shortId
         );
         return;
       }

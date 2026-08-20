@@ -36,6 +36,8 @@ export const HELP_TEXT = [
   "• `#35 salió de Banorte débito` — por handle, sin buscar el mensaje.",
   "• Responder al mensaje de la pregunta, como siempre.",
   "",
+  "Las tres aceptan foto, PDF o nota de voz: responde con la imagen del ticket, o mándala con `#35` al inicio del caption.",
+  "",
   "Varias de un jalón:",
   "```",
   "#12 Groceries",
