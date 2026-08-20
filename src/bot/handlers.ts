@@ -56,8 +56,9 @@ import {
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, questionAmountCents, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
 import { movementDate, senderInstitution } from "./email-facts.js";
-import { addIgnorePattern, listIgnorePatterns, matchesPattern } from "../webhook/ignore-rules.js";
+import { addIgnorePattern, listIgnorePatterns, matchesPattern, relaxAccents, toLiteralPattern } from "../webhook/ignore-rules.js";
 import { formatVerdict, judge } from "../webhook/pending-audit.js";
+import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
@@ -702,10 +703,15 @@ export function registerHandlers(deps: HandlerDeps): void {
     await sendSafeMessage(deps.bot.telegram, ctx.chat.id, msg);
   });
 
-  bot.command("ignore", async (ctx) => {
-    const text = ctx.message.text.replace(/^\/ignore(?:@\S+)?\s*/i, "").trim();
+  // A block rule is the one setting that fails silently — too broad and real
+  // movements stop arriving with nothing to notice — so it is proposed, its
+  // blast radius shown, and applied only on confirmation.
+  const proposedIgnores = new Map<number, { typed: string; pattern: string }>();
 
-    if (!text) {
+  bot.command("ignore", async (ctx) => {
+    const typed = ctx.message.text.replace(/^\/ignore(?:@\S+)?\s*/i, "").trim();
+
+    if (!typed) {
       const patterns = listIgnorePatterns();
       await ctx.reply(
         `🚫 *${patterns.length} reglas de ignorado*\n\n` +
@@ -716,25 +722,54 @@ export function registerHandlers(deps: HandlerDeps): void {
       return;
     }
 
-    // Show the blast radius before saving: a rule that matches more than the
-    // user pictured drops real movements silently, which is the one outcome
-    // worth being noisy about.
-    const pending = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
-    const { pattern, added, total } = addIgnorePattern(text);
-    const hit = pending.filter((i) => matchesPattern(pattern, i.entry.emailFrom, i.entry.emailSubject));
-
-    if (!added) {
-      await ctx.reply(`Ya existía esa regla (\`${pattern}\`). Van ${total}.`, { parse_mode: "Markdown" });
+    const pattern = relaxAccents(toLiteralPattern(typed));
+    if (listIgnorePatterns().includes(pattern)) {
+      await ctx.reply("Ya existe esa regla. Con `/ignore` sin texto las ves todas.", { parse_mode: "Markdown" });
       return;
     }
 
-    let msg = `🚫 Listo. A partir de ahora ignoro los correos que digan *${escapeMarkdown(text)}*.\nVan ${total} reglas.`;
-    if (hit.length > 0) {
-      for (const h of hit) takeByShortId(h.entry.shortId!);
-      msg += `\n\n📋 Quité ${hit.length} de la cola que ya coincidían:\n` +
-        hit.map((h) => `• #${h.entry.shortId} — ${h.entry.emailSubject.slice(0, 44)}`).join("\n");
+    const pending = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
+    const preview = buildIgnorePreview(typed, pattern, pending);
+    proposedIgnores.set(ctx.chat.id, { typed, pattern });
+
+    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, formatIgnorePreview(preview), {
+      reply_markup: Markup.inlineKeyboard([
+        Markup.button.callback("✅ Ignorar", "confirm_ignore"),
+        Markup.button.callback("❌ Cancelar", "cancel_ignore"),
+      ]).reply_markup,
+    });
+  });
+
+  bot.action("confirm_ignore", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const proposed = proposedIgnores.get(ctx.chat!.id);
+    if (!proposed) {
+      await ctx.reply("Esa propuesta ya no está vigente. Vuelve a escribir /ignore.");
+      return;
     }
-    await ctx.reply(msg, { parse_mode: "Markdown" });
+    proposedIgnores.delete(ctx.chat!.id);
+
+    const { pattern, added, total } = addIgnorePattern(proposed.typed);
+    const hit = ensureShortIds()
+      .filter((i) => i.entry.chatId === ctx.chat!.id)
+      .filter((i) => matchesPattern(pattern, i.entry.emailFrom, i.entry.emailSubject));
+    for (const h of hit) takeByShortId(h.entry.shortId!);
+
+    let msg = added
+      ? `🚫 Regla activa. Van ${total}.`
+      : `Esa regla ya existía. Van ${total}.`;
+    if (hit.length > 0) {
+      msg += `\n📋 Quité ${hit.length} de la cola: ${hit.map((h) => `#${h.entry.shortId}`).join(", ")}`;
+    }
+    await ctx.reply(msg);
+  });
+
+  bot.action("cancel_ignore", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const had = proposedIgnores.delete(ctx.chat!.id);
+    await ctx.reply(had ? "🗑️ Regla descartada, nada cambió." : "No había ninguna propuesta.");
   });
 
   bot.command("help", async (ctx) => {

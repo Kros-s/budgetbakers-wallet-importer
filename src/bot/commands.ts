@@ -57,7 +57,7 @@ export const HELP_TEXT = [
   "`/audit` revisa cada pendiente contra Wallet y cierra las que ya están registradas. Las dudosas te las lista sin tocarlas.",
   "",
   "*Ignorar avisos que no son movimientos*",
-  "`/ignore cambio de politica de reinversion` — deja de preguntarte por esos correos y quita de la cola los que ya coincidan.",
+  "`/ignore cambio de politica de reinversion` — te muestra qué quitaría y por qué podría ser riesgoso, y solo aplica si confirmas.",
   "`/ignore` sin texto lista las reglas activas.",
   "El filtro mira remitente y asunto, así que puedes ignorar un tipo de aviso sin ignorar al banco entero.",
   "",
