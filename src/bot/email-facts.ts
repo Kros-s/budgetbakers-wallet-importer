@@ -97,7 +97,10 @@ export function extractFacts(text: string): EmailFacts {
   ).slice(0, 4);
 
   const amounts = uniq(
-    [...flat.matchAll(/(?:\$|MXN|MN|USD)\s?\d[\d,]*(?:\.\d{2})?/gi)].map((m) => m[0].trim())
+    // Normalise "$ 1,400" → "$1,400": banks space it inconsistently and the
+    // duplicates that creates make the block look noisier than it is.
+    [...flat.matchAll(/(?:\$|MXN|MN|USD)\s?\d[\d,]*(?:\.\d{2})?/gi)]
+      .map((m) => m[0].replace(/\s+/g, "").trim())
   )
     .sort((a, b) => {
       const n = (x: string) => Number(x.replace(/[^\d.]/g, "")) || 0;

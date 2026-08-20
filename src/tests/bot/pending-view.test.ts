@@ -140,3 +140,30 @@ test("/remind and /pending <handle> render the same way", () => {
   assert.doesNotMatch(compact, /Texto del correo/);
   assert.ok(compact.length < full.length);
 });
+
+test("a question that names no amount inherits the email's, when unambiguous", () => {
+  // #21: "¿qué día de agosto fue este pago a la psicóloga?" — no figure in the
+  // question, one in the email. It was showing up as a categorisation chore.
+  const it = item(21, "¿Qué día de agosto fue este pago a Marlene?");
+  it.entry.emailText = "Tu transferencia fue enviada. Monto $1,400.00";
+  assert.equal(questionAmountCents(it.entry), 140_000);
+});
+
+test("several amounts in the email is a guess, so it stays unranked", () => {
+  // A card notice carries the charge, the minimum payment and the limit.
+  const it = item(4, "¿Qué es el comercio ABTS 12962?");
+  it.entry.emailText = "Monto $375.00 Mínimo a pagar $820.00 Límite $50,000.00";
+  assert.equal(questionAmountCents(it.entry), 0);
+});
+
+test("the question's own amount always wins over the email's", () => {
+  const it = item(5, "¿De dónde vienen los $33,750?");
+  it.entry.emailText = "Comisión $0.00";
+  assert.equal(questionAmountCents(it.entry), 3_375_000);
+});
+
+test("a missing movement date is stated, not left blank", () => {
+  const it = item(21, "¿qué día fue?");
+  it.entry.emailText = "Tu transferencia fue enviada. Monto $1,400.00";
+  assert.match(formatPendingDetail(it), /Movimiento:.*no indicado/);
+});

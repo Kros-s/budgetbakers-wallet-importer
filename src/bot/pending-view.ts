@@ -17,9 +17,21 @@ export interface PendingItem {
   entry: ClarificationEntry;
 }
 
-/** Largest amount the question mentions, in cents. 0 when it names none. */
+/**
+ * What this question is worth, in cents.
+ *
+ * The question text first, since that is what the model chose to ask about.
+ * When it names no figure — "¿qué día de agosto fue este pago?" — fall back to
+ * the email, but only when the email names exactly one amount. A notification
+ * routinely carries a minimum payment and a credit limit alongside the charge,
+ * and picking the largest would grade the wrong number. One amount is
+ * unambiguous; several is a guess, and a guess here mis-sorts the queue.
+ */
 export function questionAmountCents(entry: ClarificationEntry): number {
-  return Math.max(0, ...amountsInText(entry.claudeQuestion));
+  const asked = Math.max(0, ...amountsInText(entry.claudeQuestion));
+  if (asked > 0) return asked;
+  const inEmail = [...new Set(amountsInText(entry.emailText))];
+  return inEmail.length === 1 ? inEmail[0] : 0;
 }
 
 /**
@@ -139,7 +151,9 @@ export function formatPendingDetail(item: PendingItem, opts: DetailOptions = {})
   // finds the charge in a statement, the email date is when the bank said so.
   const moved = movementDate(entry.emailText);
   out.push("", `📌 ${oneLine(entry.emailSubject, 80)}`);
-  if (moved) out.push(`📆 Movimiento: ${moved}`);
+  // Say so when it is missing: showing only "en cola desde" leaves the least
+  // useful date as the only one on screen, which reads as an omission.
+  out.push(`📆 Movimiento: ${moved ?? "_no indicado en el correo_"}`);
   if (entry.emailDate) {
     const d = new Date(entry.emailDate);
     if (!Number.isNaN(d.getTime())) {
