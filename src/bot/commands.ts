@@ -19,6 +19,7 @@ export const BOT_COMMANDS: BotCommandSpec[] = [
   { command: "stop", description: "Salir del modo guiado" },
   { command: "cancel", description: "Descartar la propuesta pendiente" },
   { command: "reset", description: "Empezar una conversación nueva" },
+  { command: "ignore", description: "Ignorar correos por asunto (/ignore texto)" },
   { command: "help", description: "Cómo usar el bot" },
 ];
 
@@ -50,6 +51,11 @@ export const HELP_TEXT = [
   "• `/next` — modo guiado (beta): una pregunta a la vez, contestas con texto normal. La ventana dura 2 minutos; después de eso lo que escribas cuenta como mensaje nuevo. `/stop` para salir.",
   "• `/cancel` — descarta la propuesta que esté esperando confirmación.",
   "• `/reset` — arranca conversación nueva si el bot se atoró.",
+  "",
+  "*Ignorar avisos que no son movimientos*",
+  "`/ignore cambio de politica de reinversion` — deja de preguntarte por esos correos y quita de la cola los que ya coincidan.",
+  "`/ignore` sin texto lista las reglas activas.",
+  "El filtro mira remitente y asunto, así que puedes ignorar un tipo de aviso sin ignorar al banco entero.",
   "",
   "*Estados de cuenta*",
   "Mándame el PDF como archivo y lo proceso. No hace falta comando.",

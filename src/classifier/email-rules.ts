@@ -55,6 +55,9 @@ export const DEFAULT_RULES: EmailRules = {
     // Meta ad receipts land here, but the ad account is not the user's — the
     // charges are somebody else's and must not enter the ledger.
     "business-updates\\.facebook\\.com",
+    // Notice-level rules: the institution still sends real movements, only this
+    // particular announcement never does.
+    "c[aá]mbi[oó]? de pol[ií]tica de reinversi[oó]n",
   ],
   allow: [
     "notificaciones@banamex\\.com",

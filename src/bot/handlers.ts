@@ -56,6 +56,7 @@ import {
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, questionAmountCents, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
 import { senderInstitution } from "./email-facts.js";
+import { addIgnorePattern, listIgnorePatterns, matchesPattern } from "../webhook/ignore-rules.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
@@ -653,6 +654,41 @@ export function registerHandlers(deps: HandlerDeps): void {
         `_Responde con texto normal en los próximos 2 minutos, o responde a este mensaje cuando quieras. Luego /next para la siguiente, o /stop para salir._`
     );
     linkMessageId(entry.shortId!, prompt.message_id);
+  });
+
+  bot.command("ignore", async (ctx) => {
+    const text = ctx.message.text.replace(/^\/ignore(?:@\S+)?\s*/i, "").trim();
+
+    if (!text) {
+      const patterns = listIgnorePatterns();
+      await ctx.reply(
+        `🚫 *${patterns.length} reglas de ignorado*\n\n` +
+          patterns.map((p) => `• \`${p}\``).join("\n") +
+          `\n\nAgrega una con \`/ignore texto del asunto\`.`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+
+    // Show the blast radius before saving: a rule that matches more than the
+    // user pictured drops real movements silently, which is the one outcome
+    // worth being noisy about.
+    const pending = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
+    const { pattern, added, total } = addIgnorePattern(text);
+    const hit = pending.filter((i) => matchesPattern(pattern, i.entry.emailFrom, i.entry.emailSubject));
+
+    if (!added) {
+      await ctx.reply(`Ya existía esa regla (\`${pattern}\`). Van ${total}.`, { parse_mode: "Markdown" });
+      return;
+    }
+
+    let msg = `🚫 Listo. A partir de ahora ignoro los correos que digan *${escapeMarkdown(text)}*.\nVan ${total} reglas.`;
+    if (hit.length > 0) {
+      for (const h of hit) takeByShortId(h.entry.shortId!);
+      msg += `\n\n📋 Quité ${hit.length} de la cola que ya coincidían:\n` +
+        hit.map((h) => `• #${h.entry.shortId} — ${h.entry.emailSubject.slice(0, 44)}`).join("\n");
+    }
+    await ctx.reply(msg, { parse_mode: "Markdown" });
   });
 
   bot.command("help", async (ctx) => {
