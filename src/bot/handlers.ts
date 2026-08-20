@@ -24,6 +24,7 @@ import type { LookupMaps } from "../types.js";
 import { convertRows, parseCsv, rowsToCsv } from "../csv.js";
 import type { CsvRow } from "../csv.js";
 import { writeRecords } from "../records.js";
+import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import type { Logger } from "../logger.js";
 
 import type { BotConfig } from "./config.js";
@@ -325,11 +326,34 @@ async function processUserTurn(
       clarificationShortId,
     });
 
+    // Warn before the button, not after. The confirm path blocks duplicates
+    // either way, but finding out at proposal time is the difference between
+    // "why did nothing happen?" and an informed decision.
+    let dupWarning = "";
+    try {
+      const times = rows.map((r) => Date.parse(r.date.replace(" ", "T"))).filter((t) => Number.isFinite(t));
+      if (times.length > 0) {
+        const { records: candidates, originalRows: candidateRows } = convertRows(rows, deps.lookup);
+        const { check } = await buildWalletDedup(
+          deps.couch, new Date(Math.min(...times)), new Date(Math.max(...times))
+        );
+        const hits = candidates
+          .map((rec, i) => ({ hit: check(rec, candidateRows[i]), row: candidateRows[i] }))
+          .filter((x) => x.hit);
+        if (hits.length > 0) {
+          dupWarning =
+            `\n\n🔁 *Ojo:* ${hits.length} de estas filas ya parecen estar en Wallet:\n` +
+            hits.map((h) => `• $${Math.abs(parseFloat(h.row.amount)).toFixed(2)} en ${h.row.account}`).join("\n") +
+            `\nSi confirmas, esas se omiten.`;
+        }
+      }
+    } catch { /* the warning is a courtesy; the gate at confirm is the guarantee */ }
+
     const queueLen = session.pendingQueue.length;
     const queueBadge = queueLen > 1 ? ` (${queueLen} pendientes)` : "";
     const preview = cleanedText ? `${cleanedText}\n\n` : "";
     const csvPreview = csv.length > 1500 ? csv.slice(0, 1500) + "\n…(truncado)" : csv;
-    const body = `${preview}📋 Propuesta${queueBadge} — ${rows.length} registro${rows.length === 1 ? "" : "s"}:\n\`\`\`\n${csvPreview}\n\`\`\`${ruleNote}`;
+    const body = `${preview}📋 Propuesta${queueBadge} — ${rows.length} registro${rows.length === 1 ? "" : "s"}:\n\`\`\`\n${csvPreview}\n\`\`\`${dupWarning}${ruleNote}`;
 
     const sent = await ctx.reply(
       body,
@@ -389,9 +413,53 @@ async function commitPending(
     return;
   }
 
+  // Last gate before anything reaches Wallet. This path — propose, confirm,
+  // write — had no duplicate check of any kind, which is how the $33,750
+  // transfer was recorded twice on 2026-08-19: the batch had already written it
+  // that morning and answering the clarification wrote it again.
+  let toWrite = records;
+  let toWriteRows = originalRows;
+  const dupes: string[] = [];
+  try {
+    const times = originalRows
+      .map((r) => Date.parse(r.date.replace(" ", "T")))
+      .filter((t) => Number.isFinite(t));
+    if (times.length > 0) {
+      const { check } = await buildWalletDedup(
+        deps.couch, new Date(Math.min(...times)), new Date(Math.max(...times))
+      );
+      const keep: typeof records = [];
+      const keepRows: typeof originalRows = [];
+      records.forEach((rec, i) => {
+        const hit = check(rec, originalRows[i]);
+        if (hit) {
+          const amt = Math.abs(parseFloat(originalRows[i].amount)).toFixed(2);
+          dupes.push(`$${amt} en ${originalRows[i].account} — ${hit}`);
+        } else {
+          keep.push(rec);
+          keepRows.push(originalRows[i]);
+        }
+      });
+      toWrite = keep;
+      toWriteRows = keepRows;
+    }
+  } catch (err) {
+    deps.log.error("No se pudo verificar duplicados en Wallet", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  if (toWrite.length === 0) {
+    await ctx.reply(
+      `🔁 *No se escribió nada: ya está en Wallet.*\n${dupes.map((d) => `• ${d}`).join("\n")}`,
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
   let results;
   try {
-    results = await writeRecords(deps.couch, deps.userId, records);
+    results = await writeRecords(deps.couch, deps.userId, toWrite);
   } catch (err) {
     deps.log.error("writeRecords threw", {
       error: err instanceof Error ? err.message : String(err),
@@ -408,9 +476,11 @@ async function commitPending(
   const fail = results.length - ok;
 
   const now = new Date().toISOString();
-  records.forEach((rec, i) => {
+  // Iterate the rows actually sent: `records` still holds the ones filtered out
+  // as duplicates, and indexing it against `results` would misattribute them.
+  toWrite.forEach((rec, i) => {
     if (results[i]?.ok) {
-      const row = originalRows[i];
+      const row = toWriteRows[i];
       trackTransaction({
         ts: now,
         account: row.account,
@@ -433,6 +503,9 @@ async function commitPending(
   });
 
   let msg = `✅ ${ok} registro${ok === 1 ? "" : "s"} escrito${ok === 1 ? "" : "s"}.`;
+  if (dupes.length > 0) {
+    msg += `\n🔁 ${dupes.length} omitido${dupes.length === 1 ? "" : "s"} por ya estar en Wallet:\n${dupes.map((d) => `• ${d}`).join("\n")}`;
+  }
   if (fail > 0) msg += `\n❌ ${fail} fallaron en CouchDB.`;
   if (skipped.length > 0) msg += `\n⏭️ ${skipped.length} omitidos:\n${skippedReasons}`;
 
@@ -449,7 +522,7 @@ async function commitPending(
   // #14 on 2026-08-20. So also close by what was actually written: a pending
   // question asking about exactly this amount is answered by this record.
   if (ok > 0 && skipped.length === 0) {
-    for (const row of pending.rows) {
+    for (const row of toWriteRows) {
       const cents = Math.round(Math.abs(parseFloat(row.amount)) * 100);
       if (!Number.isFinite(cents) || cents === 0) continue;
       const matches = ensureShortIds()
