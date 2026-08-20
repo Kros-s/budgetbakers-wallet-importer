@@ -52,7 +52,7 @@ import {
   ensureShortIds, findByMessageId, findByShortId, linkMessageId, takeByShortId,
   updateClarificationQuestion,
 } from "../webhook/clarification-store.js";
-import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
+import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, questionAmountCents, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
 import { senderInstitution } from "./email-facts.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
@@ -438,10 +438,33 @@ async function commitPending(
 
   // The movement is finally recorded, so the question can leave the queue.
   // Only on a clean write: if anything was skipped it is still unresolved.
+  const closed: number[] = [];
   if (pending.clarificationShortId !== undefined && ok > 0 && skipped.length === 0) {
-    if (takeByShortId(pending.clarificationShortId)) {
-      msg += `\n📋 #${pending.clarificationShortId} resuelta y fuera de la cola.`;
+    if (takeByShortId(pending.clarificationShortId)) closed.push(pending.clarificationShortId);
+  }
+
+  // The link above only exists when the answer arrived as a reply or with a
+  // handle. Send the receipt photo as a plain message and the write succeeds
+  // while the question stays queued forever — which is what happened to #13 and
+  // #14 on 2026-08-20. So also close by what was actually written: a pending
+  // question asking about exactly this amount is answered by this record.
+  if (ok > 0 && skipped.length === 0) {
+    for (const row of pending.rows) {
+      const cents = Math.round(Math.abs(parseFloat(row.amount)) * 100);
+      if (!Number.isFinite(cents) || cents === 0) continue;
+      const matches = ensureShortIds()
+        .filter((i) => i.entry.chatId === session.chatId)
+        .filter((i) => !closed.includes(i.entry.shortId!))
+        .filter((i) => questionAmountCents(i.entry) === cents);
+      // Only when it is unambiguous. Two questions about the same amount is
+      // exactly the case where guessing writes the wrong outcome.
+      if (matches.length === 1 && takeByShortId(matches[0].entry.shortId!)) {
+        closed.push(matches[0].entry.shortId!);
+      }
     }
+  }
+  if (closed.length) {
+    msg += `\n📋 ${closed.map((c) => `#${c}`).join(", ")} resuelta${closed.length === 1 ? "" : "s"} y fuera de la cola.`;
   }
   await ctx.reply(msg);
 
