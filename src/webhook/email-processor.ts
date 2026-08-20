@@ -75,6 +75,8 @@ export interface EmailPayload {
   from: string;
   subject: string;
   text: string;
+  /** ISO date the email was received, so the queue can show it later. */
+  date?: string;
 }
 
 /**
@@ -208,6 +210,7 @@ export async function processEmail(
       emailFrom: payload.from,
       emailSubject: payload.subject,
       emailText: payload.text,
+      emailDate: payload.date,
       claudeQuestion: effectiveText,
       createdAt: Date.now(),
     });

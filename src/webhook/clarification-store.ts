@@ -27,6 +27,8 @@ export interface ClarificationEntry {
   emailFrom: string;
   emailSubject: string;
   emailText: string;
+  /** ISO date the email was received, when the caller knew it. */
+  emailDate?: string;
   claudeQuestion: string;
   createdAt: number;
 }

@@ -90,8 +90,10 @@ export function extractFacts(text: string): EmailFacts {
   ).slice(0, 4);
 
   const dates = uniq(
-    [...flat.matchAll(/\b\d{1,2}[/-][A-Za-z]{3}[/-]\d{4}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{1,2} de [a-záéíóú]+ (?:de )?\d{4}\b/gi)]
-      .map((m) => m[0])
+    [...flat.matchAll(
+      // dd/Mmm/yyyy · dd/mm/yyyy · yyyy/mm/dd · "8 de julio de 2026" · "08 julio 2026"
+      /\b\d{1,2}[/-][A-Za-z]{3,}[/-]\d{4}\b|\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{1,2} (?:de )?[a-záéíóú]{4,10} (?:de )?\d{4}\b/gi
+    )].map((m) => m[0])
   ).slice(0, 4);
 
   const amounts = uniq(
@@ -104,6 +106,24 @@ export function extractFacts(text: string): EmailFacts {
     .slice(0, 5);
 
   return { accounts, references, dates, amounts };
+}
+
+/**
+ * The date the movement happened, as the bank states it.
+ *
+ * Not the same as when the email arrived, and it is the one that finds the
+ * transaction in a bank statement. Banks label it, so the label is the signal:
+ * a body can carry a cut-off date and a payment-due date too, and picking the
+ * first date found would often pick one of those instead.
+ */
+export function movementDate(text: string): string | null {
+  const flat = clean(text);
+  const labelled =
+    /fecha(?:\s+y\s+hora)?(?:\s+de\s+(?:la\s+)?(?:operaci[oó]n|movimiento|transacci[oó]n|compra))?\s*:?\s*([0-9]{1,4}[/-][0-9A-Za-zÁ-úá-ú]{1,9}[/-][0-9]{2,4}(?:[^0-9]{1,12}[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\s*[AaPp]\.?[Mm]\.?)?)?)/i;
+  const m = labelled.exec(flat);
+  if (m) return m[1].replace(/\s+/g, " ").trim();
+  const any = extractFacts(text).dates;
+  return any.length ? any[0] : null;
 }
 
 /** The facts as lines for the detail view. Empty when nothing was found. */

@@ -71,3 +71,25 @@ test("relay with either one or two trailing hash segments", () => {
   assert.equal(senderDomain("ordenesenlinea_at_dominos_com_mx_sh8sj2xtpn_714c2d6a@privaterelay.appleid.com"), "dominos.com.mx");
   assert.equal(senderDomain("flyover_at_buq_mx_j479m814vc77mr_07540213@icloud.com"), "buq.mx");
 });
+
+test("takes the movement date the bank labels, not the first date in the body", async () => {
+  const { movementDate } = await import("../../bot/email-facts.js");
+  // A statement notice carries a cut-off and a due date as well; the labelled
+  // one is the charge.
+  assert.match(
+    movementDate("Monto $242.00 Fecha y hora 2026/07/23 07:18:21 PM Fecha de corte 08 julio 2026")!,
+    /2026\/07\/23/
+  );
+  assert.match(movementDate("Fecha y hora: 15/Ago/2026 a las 06:25:08 horas")!, /15\/Ago\/2026/);
+  assert.match(movementDate("Fecha de la operación: 02/08/2026")!, /02\/08\/2026/);
+});
+
+test("falls back to any date when the bank labels none", async () => {
+  const { movementDate } = await import("../../bot/email-facts.js");
+  assert.match(movementDate("Compra realizada el 16/08/2026 en OXXO")!, /16\/08\/2026/);
+});
+
+test("an email with no date at all yields null, never a wrong guess", async () => {
+  const { movementDate } = await import("../../bot/email-facts.js");
+  assert.equal(movementDate("Tu estado de cuenta ya está disponible."), null);
+});

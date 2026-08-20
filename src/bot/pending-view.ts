@@ -10,7 +10,7 @@
 
 import { amountsInText } from "../batch/integrity.js";
 import type { ClarificationEntry } from "../webhook/clarification-store.js";
-import { amountDot, extractFacts, formatFacts, senderInstitution } from "./email-facts.js";
+import { amountDot, extractFacts, formatFacts, movementDate, senderInstitution } from "./email-facts.js";
 
 export interface PendingItem {
   messageId: number;
@@ -135,11 +135,18 @@ export function formatPendingDetail(item: PendingItem, opts: DetailOptions = {})
     `${amountDot(cents)} *#${entry.shortId}*  ·  🏦 *${senderInstitution(entry.emailFrom)}*`,
   ];
   if (cents > 0) out.push(`💵 *${money(cents)}*`);
-  out.push(
-    "",
-    `📌 ${oneLine(entry.emailSubject, 80)}`,
-    `🕐 En cola desde ${when}`
-  );
+  // Two different dates, and the difference matters: the movement date is what
+  // finds the charge in a statement, the email date is when the bank said so.
+  const moved = movementDate(entry.emailText);
+  out.push("", `📌 ${oneLine(entry.emailSubject, 80)}`);
+  if (moved) out.push(`📆 Movimiento: ${moved}`);
+  if (entry.emailDate) {
+    const d = new Date(entry.emailDate);
+    if (!Number.isNaN(d.getTime())) {
+      out.push(`📨 Correo: ${d.toISOString().slice(0, 16).replace("T", " ")}`);
+    }
+  }
+  out.push(`🕐 En cola desde ${when}`);
   if (facts.length) out.push("", "*Datos del correo*", ...facts);
   out.push("", "❓ *Lo que falta*", entry.claudeQuestion.trim());
   if (withExcerpt) out.push("", "📄 *Texto del correo*", plainExcerpt(entry.emailText, 700));
