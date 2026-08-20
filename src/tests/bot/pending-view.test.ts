@@ -47,9 +47,22 @@ test("the index separates questions that name money from plain categorisation", 
     item(1, "¿De dónde vienen los $33,750?"),
     item(2, "¿Qué categoría para HIDROCAR?"),
   ]).join("\n");
-  assert.match(out, /Con monto/);
-  assert.match(out, /Categorización/);
+  assert.match(out, /Mueven dinero/);
+  assert.match(out, /Solo falta categoría/);
   assert.match(out, /33,750\.00/);
+});
+
+test("the dot sizes the amount, so the queue is scanned not read", () => {
+  const out = formatPendingIndex([
+    item(1, "¿los $33,750?"),
+    item(2, "¿los $1,200?"),
+    item(3, "¿los $80?"),
+    item(4, "¿qué categoría?"),
+  ]).join("\n");
+  assert.match(out, /🔴.*#1/s);
+  assert.match(out, /🟠.*#2/s);
+  assert.match(out, /🟡.*#3/s);
+  assert.match(out, /⚪.*#4/s);
 });
 
 test("the index is split into messages Telegram will accept", () => {
@@ -73,6 +86,8 @@ test("the detail carries the full question and part of the email", () => {
   assert.match(out, /Necesito la cuenta de origen/);   // pregunta completa, no truncada
   assert.match(out, /cuenta \*\*\*\*5933/);             // contexto del correo
   assert.match(out, /#35 tu respuesta/);
+  assert.match(out, /🏦/);                              // la institución, con icono
+  assert.doesNotMatch(out, /@/);                        // nunca la dirección cruda
 });
 
 test("HTML in a stored body never reaches the user", () => {

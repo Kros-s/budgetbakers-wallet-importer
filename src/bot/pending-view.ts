@@ -10,7 +10,7 @@
 
 import { amountsInText } from "../batch/integrity.js";
 import type { ClarificationEntry } from "../webhook/clarification-store.js";
-import { extractFacts, formatFacts, senderInstitution } from "./email-facts.js";
+import { amountDot, extractFacts, formatFacts, senderInstitution } from "./email-facts.js";
 
 export interface PendingItem {
   messageId: number;
@@ -92,23 +92,27 @@ export function formatPendingIndex(items: PendingItem[]): string[] {
   const without = sorted.filter((i) => questionAmountCents(i.entry) === 0);
 
   const lines: string[] = [`📋 *${items.length} pendientes*`, ""];
+
   if (withAmount.length) {
-    lines.push(`*Con monto* (${withAmount.length})`);
+    lines.push(`*💰 Mueven dinero — ${withAmount.length}*`, "");
     for (const { entry } of withAmount) {
-      const amount = money(questionAmountCents(entry)).padStart(12);
-      const who = senderInstitution(entry.emailFrom);
-      lines.push(`\`#${String(entry.shortId).padEnd(3)}\` ${amount}  ${oneLine(who, 16)} · ${oneLine(entry.emailSubject, 30)}`);
+      const cents = questionAmountCents(entry);
+      // Amount first and on its own line: it is what decides where to start.
+      lines.push(`${amountDot(cents)} \`#${entry.shortId}\`  *${money(cents)}*`);
+      lines.push(`      🏦 ${oneLine(senderInstitution(entry.emailFrom), 18)} · ${oneLine(entry.emailSubject, 32)}`);
+      lines.push("");
     }
-    lines.push("");
   }
+
   if (without.length) {
-    lines.push(`*Categorización* (${without.length})`);
+    lines.push(`*🏷️ Solo falta categoría — ${without.length}*`, "");
     for (const { entry } of without) {
-      lines.push(`\`#${String(entry.shortId).padEnd(3)}\` ${oneLine(entry.claudeQuestion, 52)}`);
+      lines.push(`⚪ \`#${entry.shortId}\`  ${oneLine(entry.claudeQuestion, 56)}`);
     }
     lines.push("");
   }
-  lines.push("`/pending 35` para el detalle de una · `#35 tu respuesta` para contestarla");
+
+  lines.push("👉 `/pending 35` detalle  ·  `#35 tu respuesta` para contestar");
   return chunkLines(lines);
 }
 
@@ -121,21 +125,27 @@ export function formatPendingDetail(item: PendingItem): string {
   // them read like costcomx_at_e_costco_mx_hqb5pwb4zdfbtt@icloud.com, which
   // fills the screen and identifies nothing. The institution is the useful half.
   const facts = formatFacts(extractFacts(entry.emailText));
-  return [
-    `📧 *#${entry.shortId}* · *${senderInstitution(entry.emailFrom)}*${cents > 0 ? ` · *${money(cents)}*` : ""}`,
+  const out: string[] = [
+    `${amountDot(cents)} *#${entry.shortId}*  ·  🏦 *${senderInstitution(entry.emailFrom)}*`,
+  ];
+  if (cents > 0) out.push(`💵 *${money(cents)}*`);
+  out.push(
     "",
-    `Asunto: ${oneLine(entry.emailSubject, 80)}`,
-    `En cola desde: ${when}`,
-    ...(facts.length ? ["", "*Datos del correo*", ...facts] : []),
+    `📌 ${oneLine(entry.emailSubject, 80)}`,
+    `🕐 En cola desde ${when}`
+  );
+  if (facts.length) out.push("", "*Datos del correo*", ...facts);
+  out.push(
     "",
-    `*Pregunta*`,
+    "❓ *Lo que falta*",
     entry.claudeQuestion.trim(),
     "",
-    `*Texto del correo*`,
+    "📄 *Texto del correo*",
     plainExcerpt(entry.emailText, 700),
     "",
-    `Contesta con \`#${entry.shortId} tu respuesta\`, o responde a este mensaje (también con foto o PDF).`,
-  ].join("\n");
+    `↩️ Contesta \`#${entry.shortId} tu respuesta\`, o responde a este mensaje — también con foto o PDF.`
+  );
+  return out.join("\n");
 }
 
 export interface ParsedAnswer {

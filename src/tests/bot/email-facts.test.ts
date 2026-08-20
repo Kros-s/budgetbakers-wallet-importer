@@ -48,11 +48,20 @@ test("an email with nothing to extract yields nothing to show", () => {
   assert.deepEqual(formatFacts(extractFacts("Tu estado de cuenta ya está disponible.")), []);
 });
 
-test("the rendered block labels each kind of detail", () => {
-  const out = formatFacts(extractFacts("Cargo por $1,047.00 a la tarjeta ****5432 el 16/08/2026")).join("\n");
-  assert.match(out, /Montos:/);
-  assert.match(out, /Cuentas\/tarjetas:/);
-  assert.match(out, /Fechas:/);
+test("each kind of detail gets its own icon, so the block is scanned not read", () => {
+  const out = formatFacts(extractFacts("Cargo por $1,047.00 a la tarjeta ****5432 el 16/08/2026 referencia 260815")).join("\n");
+  assert.match(out, /💵.*1,047\.00/);
+  assert.match(out, /💳.*5432/);
+  assert.match(out, /📅.*16\/08\/2026/);
+  assert.match(out, /🔖.*260815/);
+});
+
+test("the dot grades the amount by how much it deserves attention", async () => {
+  const { amountDot } = await import("../../bot/email-facts.js");
+  assert.equal(amountDot(0), "⚪");
+  assert.equal(amountDot(8_000), "🟡");        // $80
+  assert.equal(amountDot(120_000), "🟠");      // $1,200
+  assert.equal(amountDot(3_375_000), "🔴");    // $33,750
 });
 
 test("relay with either one or two trailing hash segments", () => {

@@ -109,9 +109,20 @@ export function extractFacts(text: string): EmailFacts {
 /** The facts as lines for the detail view. Empty when nothing was found. */
 export function formatFacts(facts: EmailFacts): string[] {
   const lines: string[] = [];
-  if (facts.amounts.length) lines.push(`Montos: ${facts.amounts.join(" · ")}`);
-  if (facts.accounts.length) lines.push(`Cuentas/tarjetas: ${facts.accounts.join(" · ")}`);
-  if (facts.dates.length) lines.push(`Fechas: ${facts.dates.join(" · ")}`);
-  if (facts.references.length) lines.push(`Referencias: ${facts.references.join(" · ")}`);
+  if (facts.amounts.length) lines.push(`💵 ${facts.amounts.join("  ·  ")}`);
+  if (facts.accounts.length) lines.push(`💳 ${facts.accounts.join("  ·  ")}`);
+  if (facts.dates.length) lines.push(`📅 ${facts.dates.join("  ·  ")}`);
+  if (facts.references.length) lines.push(`🔖 ${facts.references.join("  ·  ")}`);
   return lines;
+}
+
+/**
+ * A dot sized by the amount, so a queue is scanned rather than read.
+ * Thresholds are about attention, not accounting: red is "look at this now".
+ */
+export function amountDot(cents: number): string {
+  if (cents === 0) return "⚪";
+  if (cents >= 1_000_000) return "🔴";
+  if (cents >= 100_000) return "🟠";
+  return "🟡";
 }
