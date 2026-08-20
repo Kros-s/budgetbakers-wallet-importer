@@ -227,7 +227,9 @@ async function processUserTurn(
   systemPrompt: string = SYSTEM_PROMPT,
   /** Set when this turn is answering a clarification, so it can be kept or
    *  dropped according to how the turn ends. */
-  clarificationShortId?: number
+  clarificationShortId?: number,
+  /** True when the user was correcting a proposal that is still on screen. */
+  amending = false
 ): Promise<void> {
   const { config, log } = deps;
   let activeSession = session;
@@ -320,6 +322,25 @@ async function processUserTurn(
         "⚠️ Claude emitió un bloque CSV vacío. Intenta describir el gasto otra vez."
       );
       return;
+    }
+
+    // The old proposal is still on screen with live buttons, and its data is
+    // now wrong. Pressing it would write the version the user just corrected —
+    // silently, since nothing distinguishes a stale message from a fresh one.
+    if (amending) {
+      for (const stale of clearAllPending(session.chatId)) {
+        if (stale.messageId === undefined) continue;
+        await ctx.telegram
+          .editMessageReplyMarkup(session.chatId, stale.messageId, undefined, { inline_keyboard: [] })
+          .catch(() => {});
+        await ctx.telegram
+          .editMessageText(
+            session.chatId, stale.messageId, undefined,
+            `~Propuesta reemplazada~\n\n_Corregida abajo._`,
+            { parse_mode: "Markdown" }
+          )
+          .catch(() => {});
+      }
     }
 
     setPending(session.chatId, {
@@ -822,7 +843,9 @@ export function registerHandlers(deps: HandlerDeps): void {
         (caption ? `Caption del usuario: "${caption}"\n\n` : "") +
         `Analízala (lee el archivo con Read), extrae los movimientos y propón el CSV cuando estés listo, o pregunta lo que falte.`;
 
-      await processUserTurn(deps, ctx, session, prompt);
+      // A photo sent while a proposal is on screen is a correction of it far
+      // more often than a second, unrelated expense.
+      await processUserTurn(deps, ctx, session, prompt, SYSTEM_PROMPT, undefined, session.pendingQueue.length > 0);
     } catch (err) {
       log.error("Photo handler failed", {
         error: err instanceof Error ? err.message : String(err),
@@ -875,7 +898,7 @@ export function registerHandlers(deps: HandlerDeps): void {
         (caption ? `Caption: "${caption}"\n\n` : "") +
         `Léelo (con Read; si es PDF puedes pasar pages para PDFs grandes), extrae movimientos y propón el CSV cuando estés listo. Si necesitas info, pregunta.`;
 
-      await processUserTurn(deps, ctx, session, prompt);
+      await processUserTurn(deps, ctx, session, prompt, SYSTEM_PROMPT, undefined, session.pendingQueue.length > 0);
     } catch (err) {
       log.error("Document handler failed", {
         error: err instanceof Error ? err.message : String(err),
@@ -943,7 +966,7 @@ export function registerHandlers(deps: HandlerDeps): void {
         `El usuario envió un mensaje de voz (${voice.duration}s). Transcripción automática:\n\n"${transcript}"\n\n` +
         `Extrae los movimientos mencionados y propón el CSV cuando estés listo, o pregunta lo que falte.`;
 
-      await processUserTurn(deps, ctx, session, prompt);
+      await processUserTurn(deps, ctx, session, prompt, SYSTEM_PROMPT, undefined, session.pendingQueue.length > 0);
     } catch (err) {
       log.error("Voice handler failed", {
         error: err instanceof Error ? err.message : String(err),
@@ -984,6 +1007,7 @@ export function registerHandlers(deps: HandlerDeps): void {
     const text = ctx.message.text.trim();
     const session = getOrCreateSession(ctx.chat.id);
     const replyToId = ctx.message.reply_to_message?.message_id;
+    let amendingProposal = false;
 
     if (session.pendingQueue.length > 0) {
       const word = text.toLowerCase();
@@ -996,7 +1020,9 @@ export function registerHandlers(deps: HandlerDeps): void {
         await ctx.reply(taken ? "🗑️ Propuesta descartada." : "Nada pendiente que cancelar.");
         return;
       }
-      // Falls through: user is amending — let Claude refine it.
+      // Falls through: user is amending — let Claude refine it, and the new
+      // proposal will supersede the one still on screen.
+      amendingProposal = true;
     }
 
     // ── Respuestas por handle: `#12 Groceries`, una o varias por mensaje ──
@@ -1088,7 +1114,7 @@ export function registerHandlers(deps: HandlerDeps): void {
     }
 
     try {
-      await processUserTurn(deps, ctx, session, text);
+      await processUserTurn(deps, ctx, session, text, SYSTEM_PROMPT, undefined, amendingProposal);
     } catch (err) {
       log.error("Text handler failed", {
         error: err instanceof Error ? err.message : String(err),
