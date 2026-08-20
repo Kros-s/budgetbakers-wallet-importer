@@ -5,6 +5,7 @@ import type { Telegraf } from "telegraf";
 
 import { convertRows, parseCsv } from "../csv.js";
 import { writeRecords } from "../records.js";
+import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { challengeNoTransaction, parseVerdict } from "./verdict.js";
@@ -219,11 +220,34 @@ export async function processEmail(
 
   // Happy path: all rows resolved → dedup check → silent write + Telegram notification
   if (skipped.length === 0 && records.length > 0) {
+    // The batch passes a dedup built over its window; the interactive bot has
+    // none, so answering a clarification could re-write what the batch already
+    // recorded — which is how $33,750 was booked twice on 2026-08-19. Build one
+    // on demand around the dates being proposed.
+    let walletDedup = deps.walletDedup;
+    if (!walletDedup) {
+      try {
+        const times = originalRows
+          .map((r) => Date.parse(r.date.replace(" ", "T")))
+          .filter((t) => Number.isFinite(t));
+        if (times.length > 0) {
+          const built = await buildWalletDedup(
+            deps.couch,
+            new Date(Math.min(...times)),
+            new Date(Math.max(...times))
+          );
+          walletDedup = built.check;
+        }
+      } catch (err) {
+        console.error(`[email] no se pudo construir el dedup de Wallet: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     const duplicates = records
       .map((rec, i) => ({ rec, row: originalRows[i] }))
       .filter(({ rec, row }) =>
         findDuplicate(rec.accountId, parseFloat(row.amount), row.payee) !== null ||
-        (deps.walletDedup ? deps.walletDedup(rec, row) !== null : false));
+        (walletDedup ? walletDedup(rec, row) !== null : false));
 
     if (duplicates.length > 0) {
       const dupLines = duplicates.map(({ row }) => {
