@@ -10,6 +10,7 @@
 
 import { amountsInText } from "../batch/integrity.js";
 import type { ClarificationEntry } from "../webhook/clarification-store.js";
+import { extractFacts, formatFacts, senderInstitution } from "./email-facts.js";
 
 export interface PendingItem {
   messageId: number;
@@ -74,8 +75,7 @@ export function plainExcerpt(text: string, max: number): string {
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
-const shortSender = (from: string) =>
-  from.replace(/_at_/, "@").split("@")[0].slice(0, 20);
+
 
 /**
  * One line per question, all of them.
@@ -96,7 +96,8 @@ export function formatPendingIndex(items: PendingItem[]): string[] {
     lines.push(`*Con monto* (${withAmount.length})`);
     for (const { entry } of withAmount) {
       const amount = money(questionAmountCents(entry)).padStart(12);
-      lines.push(`\`#${String(entry.shortId).padEnd(3)}\` ${amount}  ${oneLine(entry.emailSubject || shortSender(entry.emailFrom), 34)}`);
+      const who = senderInstitution(entry.emailFrom);
+      lines.push(`\`#${String(entry.shortId).padEnd(3)}\` ${amount}  ${oneLine(who, 16)} · ${oneLine(entry.emailSubject, 30)}`);
     }
     lines.push("");
   }
@@ -116,20 +117,24 @@ export function formatPendingDetail(item: PendingItem): string {
   const { entry } = item;
   const cents = questionAmountCents(entry);
   const when = entry.createdAt ? new Date(entry.createdAt).toISOString().slice(0, 10) : "?";
+  // The sender address is deliberately absent: with Apple private relay most of
+  // them read like costcomx_at_e_costco_mx_hqb5pwb4zdfbtt@icloud.com, which
+  // fills the screen and identifies nothing. The institution is the useful half.
+  const facts = formatFacts(extractFacts(entry.emailText));
   return [
-    `📧 *#${entry.shortId}*${cents > 0 ? ` · *${money(cents)}*` : ""}`,
+    `📧 *#${entry.shortId}* · *${senderInstitution(entry.emailFrom)}*${cents > 0 ? ` · *${money(cents)}*` : ""}`,
     "",
-    `De: ${shortSender(entry.emailFrom)}`,
     `Asunto: ${oneLine(entry.emailSubject, 80)}`,
     `En cola desde: ${when}`,
+    ...(facts.length ? ["", "*Datos del correo*", ...facts] : []),
     "",
     `*Pregunta*`,
     entry.claudeQuestion.trim(),
     "",
-    `*Del correo*`,
+    `*Texto del correo*`,
     plainExcerpt(entry.emailText, 700),
     "",
-    `Contesta con \`#${entry.shortId} tu respuesta\``,
+    `Contesta con \`#${entry.shortId} tu respuesta\`, o responde a este mensaje (también con foto o PDF).`,
   ].join("\n");
 }
 

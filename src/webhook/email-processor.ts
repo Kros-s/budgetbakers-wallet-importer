@@ -9,6 +9,7 @@ import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { challengeNoTransaction, parseVerdict } from "./verdict.js";
+import { senderInstitution } from "../bot/email-facts.js";
 import { logVerdict } from "./verdict-log.js";
 import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 
@@ -200,7 +201,7 @@ export async function processEmail(
     const sent = await sendSafeMessage(
       bot.telegram,
       notificationChatId,
-      `📧 *Correo de ${escapeMarkdown(payload.from)}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${effectiveText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${ruleNote}`
+      `📧 *Correo de ${escapeMarkdown(senderInstitution(payload.from))}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${effectiveText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${ruleNote}`
     );
     storeClarification(sent.message_id, {
       chatId: notificationChatId,

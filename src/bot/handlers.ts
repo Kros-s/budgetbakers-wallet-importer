@@ -54,6 +54,7 @@ import {
 } from "../webhook/clarification-store.js";
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
+import { senderInstitution } from "./email-facts.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
@@ -530,7 +531,7 @@ export function registerHandlers(deps: HandlerDeps): void {
       const sent = await sendSafeMessage(
         deps.bot.telegram,
         ctx.chat.id,
-        `📧 *#${entry.shortId} · ${escapeMarkdown(entry.emailFrom)}*\n\n` +
+        `📧 *#${entry.shortId} · ${escapeMarkdown(senderInstitution(entry.emailFrom))}*\n\n` +
           `Asunto: ${escapeMarkdown(entry.emailSubject)}\n\n${entry.claudeQuestion}\n\n` +
           `_↩️ Responde a este mensaje, o escribe \`#${entry.shortId} tu respuesta\`._`
       );
@@ -553,7 +554,7 @@ export function registerHandlers(deps: HandlerDeps): void {
       deps.bot.telegram,
       ctx.chat.id,
       `🧭 *Modo guiado \\(beta\\)* · quedan ${items.length}\n\n` +
-        `📧 *#${entry.shortId} · ${escapeMarkdown(entry.emailFrom)}*\n${entry.claudeQuestion}\n\n` +
+        `📧 *#${entry.shortId} · ${escapeMarkdown(senderInstitution(entry.emailFrom))}*\n${entry.claudeQuestion}\n\n` +
         `_Responde con texto normal en los próximos 2 minutos, o responde a este mensaje cuando quieras. Luego /next para la siguiente, o /stop para salir._`
     );
     linkMessageId(entry.shortId!, prompt.message_id);
@@ -856,7 +857,7 @@ export function registerHandlers(deps: HandlerDeps): void {
 
     if (found) {
       try {
-        await replySafe(ctx, `📧 Procesando tu respuesta sobre el correo de _${escapeMarkdown(found.entry.emailFrom)}_…`);
+        await replySafe(ctx, `📧 Procesando tu respuesta sobre el correo de _${escapeMarkdown(senderInstitution(found.entry.emailFrom))}_…`);
         await processUserTurn(
           deps, ctx, session,
           await buildClarificationPrompt(deps, found.entry, text),
