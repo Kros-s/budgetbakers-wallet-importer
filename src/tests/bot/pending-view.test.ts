@@ -84,7 +84,7 @@ test("the detail carries the full question and part of the email", () => {
   assert.match(out, /#35/);
   assert.match(out, /33,750\.00/);
   assert.match(out, /Necesito la cuenta de origen/);   // pregunta completa, no truncada
-  assert.match(out, /cuenta \*\*\*\*5933/);             // contexto del correo
+  assert.match(out, /cuenta (?:\\\*){4}5933/);          // contexto del correo, escapado
   assert.match(out, /#35 tu respuesta/);
   assert.match(out, /🏦/);                              // la institución, con icono
   assert.doesNotMatch(out, /@/);                        // nunca la dirección cruda
@@ -166,4 +166,20 @@ test("a missing movement date is stated, not left blank", () => {
   const it = item(21, "¿qué día fue?");
   it.entry.emailText = "Tu transferencia fue enviada. Monto $1,400.00";
   assert.match(formatPendingDetail(it), /Movimiento:.*no indicado/);
+});
+
+test("content from the email cannot break the message formatting", () => {
+  // "NO_TRANSACTION" alone did it: one unmatched underscore makes Telegram
+  // reject the Markdown, and the message arrives with its asterisks showing.
+  const it = item(40, "NO_TRANSACTION Este correo es un aviso *administrativo*");
+  it.entry.emailSubject = "Cambio de politica [automatica]";
+  it.entry.emailText = "Saldo $10,097.91 en la cuenta **9775";
+  const out = formatPendingDetail(it);
+
+  assert.match(out, /NO\\_TRANSACTION/, "el guion bajo del veredicto no se escapó");
+  assert.doesNotMatch(out, /(?<!\\)\*administrativo/, "un asterisco del correo llegó sin escapar");
+  assert.match(out, /\\\[automatica\\?\]/, "el corchete del asunto no se escapó");
+  // Y el formato propio sigue intacto.
+  assert.match(out, /\*#40\*/);
+  assert.match(out, /\*Lo que falta\*/);
 });

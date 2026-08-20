@@ -136,15 +136,19 @@ export function takeClarification(messageId: number): ClarificationEntry | null 
     const key = String(messageId);
     if (store[key]) {
       const entry = store[key];
+      const ids = messageIdsOf(key, entry);
       delete store[key];
       save(store);
+      recordClosed(ids, entry.shortId ?? 0, "resuelta");
       return entry;
     }
     // Not the message the queue is keyed by — try the ones that present it too.
     for (const [k, entry] of Object.entries(store)) {
       if (entry.aliasMessageIds?.includes(messageId)) {
+        const ids = messageIdsOf(k, entry);
         delete store[k];
         save(store);
+        recordClosed(ids, entry.shortId ?? 0, "resuelta");
         return entry;
       }
     }
@@ -197,6 +201,56 @@ export function findByShortId(shortId: number): { messageId: number; entry: Clar
   return null;
 }
 
+const CLOSED_PATH = join(process.cwd(), "data/bot/closed-clarifications.json");
+const CLOSED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export interface ClosedNote {
+  shortId: number;
+  reason: string;
+  closedAt: number;
+}
+
+/**
+ * Remembers which Telegram messages used to be questions.
+ *
+ * A closed question leaves its message on screen inviting a reply, and the reply
+ * used to fall through to the generic handler — the bot answered "¿a qué correo
+ * te refieres?" to someone replying to a specific email. Knowing the message was
+ * a question is what lets it say so.
+ */
+export function recordClosed(messageIds: number[], shortId: number, reason: string): void {
+  try {
+    const log: Record<string, ClosedNote> = (() => {
+      try {
+        return JSON.parse(readFileSync(CLOSED_PATH, "utf8")) as Record<string, ClosedNote>;
+      } catch {
+        return {};
+      }
+    })();
+    const cutoff = Date.now() - CLOSED_TTL_MS;
+    for (const k of Object.keys(log)) if (log[k].closedAt < cutoff) delete log[k];
+    for (const id of messageIds) log[String(id)] = { shortId, reason, closedAt: Date.now() };
+    mkdirSync(join(process.cwd(), "data/bot"), { recursive: true });
+    writeFileSync(CLOSED_PATH, JSON.stringify(log, null, 1));
+  } catch {
+    // Losing this costs a confusing reply, never data.
+  }
+}
+
+export function findClosed(messageId: number): ClosedNote | null {
+  try {
+    const log = JSON.parse(readFileSync(CLOSED_PATH, "utf8")) as Record<string, ClosedNote>;
+    return log[String(messageId)] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every message id that showed this question. */
+function messageIdsOf(key: string, entry: ClarificationEntry): number[] {
+  return [Number(key), ...(entry.aliasMessageIds ?? [])];
+}
+
 /** Peeks by Telegram message id, following the aliases. Does not remove. */
 export function findByMessageId(messageId: number): { messageId: number; entry: ClarificationEntry } | null {
   const store = load();
@@ -229,13 +283,15 @@ export function updateClarificationQuestion(shortId: number, question: string): 
 }
 
 /** Removes and returns the clarification with this handle. */
-export function takeByShortId(shortId: number): ClarificationEntry | null {
+export function takeByShortId(shortId: number, reason = "resuelta"): ClarificationEntry | null {
   return withLock(() => {
     const store = load();
     for (const [key, entry] of Object.entries(store)) {
       if (entry.shortId === shortId) {
+        const ids = messageIdsOf(key, entry);
         delete store[key];
         save(store);
+        recordClosed(ids, shortId, reason);
         return entry;
       }
     }

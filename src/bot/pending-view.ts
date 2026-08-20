@@ -11,6 +11,7 @@
 import { amountsInText } from "../batch/integrity.js";
 import type { ClarificationEntry } from "../webhook/clarification-store.js";
 import { amountDot, extractFacts, formatFacts, movementDate, senderInstitution } from "./email-facts.js";
+import { escapeMarkdown } from "./telegram-safe.js";
 
 export interface PendingItem {
   messageId: number;
@@ -111,7 +112,7 @@ export function formatPendingIndex(items: PendingItem[]): string[] {
       const cents = questionAmountCents(entry);
       // Amount first and on its own line: it is what decides where to start.
       lines.push(`${amountDot(cents)} \`#${entry.shortId}\`  *${money(cents)}*`);
-      lines.push(`      🏦 ${oneLine(senderInstitution(entry.emailFrom), 18)} · ${oneLine(entry.emailSubject, 32)}`);
+      lines.push(`      🏦 ${escapeMarkdown(oneLine(senderInstitution(entry.emailFrom), 18))} · ${escapeMarkdown(oneLine(entry.emailSubject, 32))}`);
       lines.push("");
     }
   }
@@ -119,7 +120,7 @@ export function formatPendingIndex(items: PendingItem[]): string[] {
   if (without.length) {
     lines.push(`*🏷️ Solo falta categoría — ${without.length}*`, "");
     for (const { entry } of without) {
-      lines.push(`⚪ \`#${entry.shortId}\`  ${oneLine(entry.claudeQuestion, 56)}`);
+      lines.push(`⚪ \`#${entry.shortId}\`  ${escapeMarkdown(oneLine(entry.claudeQuestion, 56))}`);
     }
     lines.push("");
   }
@@ -143,17 +144,20 @@ export function formatPendingDetail(item: PendingItem, opts: DetailOptions = {})
   // them read like costcomx_at_e_costco_mx_hqb5pwb4zdfbtt@icloud.com, which
   // fills the screen and identifies nothing. The institution is the useful half.
   const facts = formatFacts(extractFacts(entry.emailText));
+  // Everything below comes from the email or the model, so it is escaped: a
+  // stray "_" — "NO_TRANSACTION" alone does it — makes Telegram reject the
+  // Markdown and the whole message arrives with its asterisks showing.
   const out: string[] = [
-    `${amountDot(cents)} *#${entry.shortId}*  ·  🏦 *${senderInstitution(entry.emailFrom)}*`,
+    `${amountDot(cents)} *#${entry.shortId}*  ·  🏦 *${escapeMarkdown(senderInstitution(entry.emailFrom))}*`,
   ];
   if (cents > 0) out.push(`💵 *${money(cents)}*`);
   // Two different dates, and the difference matters: the movement date is what
   // finds the charge in a statement, the email date is when the bank said so.
   const moved = movementDate(entry.emailText);
-  out.push("", `📌 ${oneLine(entry.emailSubject, 80)}`);
+  out.push("", `📌 ${escapeMarkdown(oneLine(entry.emailSubject, 80))}`);
   // Say so when it is missing: showing only "en cola desde" leaves the least
   // useful date as the only one on screen, which reads as an omission.
-  out.push(`📆 Movimiento: ${moved ?? "_no indicado en el correo_"}`);
+  out.push(`📆 Movimiento: ${moved ? escapeMarkdown(moved) : "_no indicado en el correo_"}`);
   if (entry.emailDate) {
     const d = new Date(entry.emailDate);
     if (!Number.isNaN(d.getTime())) {
@@ -161,9 +165,9 @@ export function formatPendingDetail(item: PendingItem, opts: DetailOptions = {})
     }
   }
   out.push(`🕐 En cola desde ${when}`);
-  if (facts.length) out.push("", "*Datos del correo*", ...facts);
-  out.push("", "❓ *Lo que falta*", entry.claudeQuestion.trim());
-  if (withExcerpt) out.push("", "📄 *Texto del correo*", plainExcerpt(entry.emailText, 700));
+  if (facts.length) out.push("", "*Datos del correo*", ...facts.map(escapeMarkdown));
+  out.push("", "❓ *Lo que falta*", escapeMarkdown(entry.claudeQuestion.trim()));
+  if (withExcerpt) out.push("", "📄 *Texto del correo*", escapeMarkdown(plainExcerpt(entry.emailText, 700)));
   out.push(
     "",
     `↩️ Contesta \`#${entry.shortId} tu respuesta\`, o responde a este mensaje — también con foto o PDF.`

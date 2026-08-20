@@ -50,8 +50,8 @@ import {
 import { EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
 import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "../webhook/learned-rules.js";
 import {
-  ensureShortIds, findByMessageId, findByShortId, linkMessageId, takeByShortId,
-  updateClarificationQuestion,
+  ensureShortIds, findByMessageId, findByShortId, findClosed, linkMessageId,
+  takeByShortId, updateClarificationQuestion,
 } from "../webhook/clarification-store.js";
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, questionAmountCents, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
@@ -537,7 +537,7 @@ async function commitPending(
   // Only on a clean write: if anything was skipped it is still unresolved.
   const closed: number[] = [];
   if (pending.clarificationShortId !== undefined && ok > 0 && skipped.length === 0) {
-    if (takeByShortId(pending.clarificationShortId)) closed.push(pending.clarificationShortId);
+    if (takeByShortId(pending.clarificationShortId, "se registró el movimiento")) closed.push(pending.clarificationShortId);
   }
 
   // The link above only exists when the answer arrived as a reply or with a
@@ -555,7 +555,7 @@ async function commitPending(
         .filter((i) => questionAmountCents(i.entry) === cents);
       // Only when it is unambiguous. Two questions about the same amount is
       // exactly the case where guessing writes the wrong outcome.
-      if (matches.length === 1 && takeByShortId(matches[0].entry.shortId!)) {
+      if (matches.length === 1 && takeByShortId(matches[0].entry.shortId!, "se registró un movimiento por ese monto")) {
         closed.push(matches[0].entry.shortId!);
       }
     }
@@ -702,7 +702,7 @@ export function registerHandlers(deps: HandlerDeps): void {
         movementDate: movementDate(entry.emailText), matches,
       });
       if (verdict.resolved) {
-        takeByShortId(entry.shortId!);
+        takeByShortId(entry.shortId!, "ya estaba en Wallet");
         resolved.push(formatVerdict(verdict));
       } else {
         doubtful.push(formatVerdict(verdict));
@@ -775,7 +775,7 @@ export function registerHandlers(deps: HandlerDeps): void {
     const hit = ensureShortIds()
       .filter((i) => i.entry.chatId === ctx.chat!.id)
       .filter((i) => matchesPattern(pattern, i.entry.emailFrom, i.entry.emailSubject));
-    for (const h of hit) takeByShortId(h.entry.shortId!);
+    for (const h of hit) takeByShortId(h.entry.shortId!, "la ignoraste con /ignore");
 
     let msg = added
       ? `🚫 Regla activa. Van ${total}.`
@@ -1092,6 +1092,21 @@ export function registerHandlers(deps: HandlerDeps): void {
 
     // Only resolve a clarification via explicit reply-to — never auto-consume free text.
     const found = replyToId ? findByMessageId(replyToId) : null;
+
+    // The message is still on screen after the question closes, and a reply to
+    // it used to fall through to the generic handler — which answered "¿a qué
+    // correo te refieres?" to someone replying to a specific email.
+    if (!found && replyToId !== undefined) {
+      const closed = findClosed(replyToId);
+      if (closed) {
+        await ctx.reply(
+          `✅ Esa pregunta (#${closed.shortId}) ya se cerró: ${closed.reason}.\n\n` +
+            `Si el movimiento quedó mal registrado, dímelo con el monto y la fecha. ` +
+            `Con /pending ves lo que sigue abierto.`
+        );
+        return;
+      }
+    }
 
     if (found) {
       try {

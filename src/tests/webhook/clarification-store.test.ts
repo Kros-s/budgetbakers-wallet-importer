@@ -116,3 +116,25 @@ test("updating an unknown handle changes nothing", async () => {
   assert.equal(listClarifications().length, 1);
   assert.doesNotMatch(listClarifications()[0].entry.claudeQuestion, /no debería/);
 });
+
+test("a closed question is remembered, so a late reply can be answered", async () => {
+  const { findClosed, linkMessageId, ensureShortIds, takeByShortId } =
+    await import("../../webhook/clarification-store.js");
+  storeClarification(1136, entry(Date.now(), "SPEI a MIFEL"));
+  const [{ entry: stored }] = ensureShortIds();
+  linkMessageId(stored.shortId!, 1275);          // /remind lo reenvió
+  takeByShortId(stored.shortId!, "ya estaba en Wallet");
+  // Replying to either message must be recognisable, not fall through.
+  for (const id of [1136, 1275]) {
+    const note = findClosed(id);
+    assert.ok(note, `el mensaje ${id} no quedó registrado como cerrado`);
+    assert.equal(note.shortId, stored.shortId);
+    assert.match(note.reason, /ya estaba en Wallet/);
+  }
+  assert.equal(findClosed(999999), null);
+});
+
+test("recordClosed never throws, whatever it is handed", async () => {
+  const { recordClosed } = await import("../../webhook/clarification-store.js");
+  assert.doesNotThrow(() => recordClosed([], 0, ""));
+});
