@@ -65,3 +65,31 @@ test("the store file is left as valid JSON, with no temp or lock residue", () =>
   assert.deepEqual(leftovers, []);
   JSON.parse(fs.readFileSync(path.join(dir, "pending-clarifications.json"), "utf8"));
 });
+
+test("replying to a /pending detail or a /remind resend resolves the question", async () => {
+  const { linkMessageId, ensureShortIds } = await import("../../webhook/clarification-store.js");
+  storeClarification(500, entry(Date.now(), "pregunta original"));
+  const [{ entry: stored }] = ensureShortIds();
+  // The bot shows the same question again in two other messages.
+  linkMessageId(stored.shortId!, 900);
+  linkMessageId(stored.shortId!, 901);
+  // Replying to either of those must resolve it, not open a new expense.
+  assert.ok(takeClarification(901), "no resolvió por el mensaje enlazado");
+  // And it is gone for good — the original key included.
+  assert.equal(takeClarification(500), null);
+  assert.equal(takeClarification(900), null);
+});
+
+test("the original message keeps working after being re-shown", async () => {
+  const { linkMessageId, ensureShortIds } = await import("../../webhook/clarification-store.js");
+  storeClarification(600, entry(Date.now(), "otra"));
+  const [{ entry: stored }] = ensureShortIds();
+  linkMessageId(stored.shortId!, 950);
+  assert.ok(takeClarification(600), "la clave original dejó de funcionar");
+});
+
+test("an unrelated message id resolves nothing", () => {
+  storeClarification(700, entry(Date.now(), "x"));
+  assert.equal(takeClarification(12345), null);
+  assert.ok(takeClarification(700));
+});

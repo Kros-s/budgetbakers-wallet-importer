@@ -15,6 +15,14 @@ export interface ClarificationEntry {
    * backfills them.
    */
   shortId?: number;
+  /**
+   * Other Telegram messages that present this same question — a /remind
+   * resend, a /pending detail, a /next prompt. Replying to any of them
+   * resolves it, because the user has no way to know which message the queue
+   * happens to be keyed by, and a reply that falls through is read as a brand
+   * new expense.
+   */
+  aliasMessageIds?: number[];
   chatId: number;
   emailFrom: string;
   emailSubject: string;
@@ -124,12 +132,40 @@ export function takeClarification(messageId: number): ClarificationEntry | null 
   return withLock(() => {
     const store = load();
     const key = String(messageId);
-    const entry = store[key] ?? null;
-    if (entry) {
+    if (store[key]) {
+      const entry = store[key];
       delete store[key];
       save(store);
+      return entry;
     }
-    return entry;
+    // Not the message the queue is keyed by — try the ones that present it too.
+    for (const [k, entry] of Object.entries(store)) {
+      if (entry.aliasMessageIds?.includes(messageId)) {
+        delete store[k];
+        save(store);
+        return entry;
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * Records that another message now shows this question, so replying to it
+ * works. Unlike re-keying, the original message keeps working too.
+ */
+export function linkMessageId(shortId: number, messageId: number): void {
+  withLock(() => {
+    const store = load();
+    for (const entry of Object.values(store)) {
+      if (entry.shortId === shortId) {
+        const aliases = new Set(entry.aliasMessageIds ?? []);
+        aliases.add(messageId);
+        entry.aliasMessageIds = [...aliases];
+        save(store);
+        return;
+      }
+    }
   });
 }
 

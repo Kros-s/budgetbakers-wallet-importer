@@ -49,7 +49,7 @@ import {
 import { EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
 import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "../webhook/learned-rules.js";
 import {
-  ensureShortIds, findByShortId, rekeyClarification, takeByShortId,
+  ensureShortIds, findByShortId, linkMessageId, takeByShortId,
 } from "../webhook/clarification-store.js";
 import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAnswers, sortByImportance } from "./pending-view.js";
 import { HELP_TEXT } from "./commands.js";
@@ -435,11 +435,13 @@ export function registerHandlers(deps: HandlerDeps): void {
     // `/pending 35` asks for one question in full; `/pending` is the index.
     if (arg && /^\d+$/.test(arg)) {
       const one = items.find((i) => i.entry.shortId === Number(arg));
-      await sendSafeMessage(
+      const sent = await sendSafeMessage(
         deps.bot.telegram,
         ctx.chat.id,
         one ? formatPendingDetail(one) : `No hay pendiente #${arg}. Usa /pending para ver la lista.`
       );
+      // Replying to this detail must resolve the question, not open a new expense.
+      if (one) linkMessageId(one.entry.shortId!, sent.message_id);
       return;
     }
 
@@ -465,8 +467,9 @@ export function registerHandlers(deps: HandlerDeps): void {
           `Asunto: ${escapeMarkdown(entry.emailSubject)}\n\n${entry.claudeQuestion}\n\n` +
           `_↩️ Responde a este mensaje, o escribe \`#${entry.shortId} tu respuesta\`._`
       );
-      // Keep the handle, follow the new message so reply-to works again.
-      rekeyClarification(messageId, sent.message_id);
+      // Link rather than move: the original message keeps working too.
+      void messageId;
+      linkMessageId(entry.shortId!, sent.message_id);
     }
   });
 
@@ -479,13 +482,14 @@ export function registerHandlers(deps: HandlerDeps): void {
     }
     const { entry } = items[0];
     startGuided(ctx.chat.id, entry.shortId!);
-    await sendSafeMessage(
+    const prompt = await sendSafeMessage(
       deps.bot.telegram,
       ctx.chat.id,
       `🧭 *Modo guiado \\(beta\\)* · quedan ${items.length}\n\n` +
         `📧 *#${entry.shortId} · ${escapeMarkdown(entry.emailFrom)}*\n${entry.claudeQuestion}\n\n` +
-        `_Responde con texto normal en los próximos 2 minutos. Luego /next para la siguiente, o /stop para salir._`
+        `_Responde con texto normal en los próximos 2 minutos, o responde a este mensaje cuando quieras. Luego /next para la siguiente, o /stop para salir._`
     );
+    linkMessageId(entry.shortId!, prompt.message_id);
   });
 
   bot.command("help", async (ctx) => {
