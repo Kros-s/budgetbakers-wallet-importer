@@ -102,3 +102,16 @@ test("marketing from a non-bank is never challenged", () => {
     null
   );
 });
+
+test("the token is recognised at the end, which is how agreement is phrased", () => {
+  // "Confirmado, se descarta por reembolso. NO_TRANSACTION" — reading only the
+  // leading form filed these agreements back as fresh questions.
+  const v = parseVerdict("Confirmado, se descarta por reembolso. NO_TRANSACTION");
+  assert.equal(v.isNoTransaction, true);
+  assert.match(v.reason, /se descarta por reembolso/);
+  assert.doesNotMatch(v.reason, /NO_TRANSACTION/);
+});
+
+test("a trailing mention inside a sentence is not a verdict", () => {
+  assert.equal(parseVerdict("¿Debo marcarlo NO_TRANSACTION o registrarlo?").isNoTransaction, false);
+});

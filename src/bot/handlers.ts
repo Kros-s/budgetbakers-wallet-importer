@@ -58,6 +58,7 @@ import { HELP_TEXT } from "./commands.js";
 import { movementDate, senderInstitution } from "./email-facts.js";
 import { addIgnorePattern, listIgnorePatterns, matchesPattern, relaxAccents, toLiteralPattern } from "../webhook/ignore-rules.js";
 import { formatVerdict, judge } from "../webhook/pending-audit.js";
+import { parseVerdict } from "../webhook/verdict.js";
 import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
@@ -388,6 +389,23 @@ async function processUserTurn(
     );
     setPendingMessageId(session.chatId, sent.message_id);
     return;
+  }
+
+  // The user judged this one not to be a movement and the model agreed. Their
+  // call closes it: a dismissal is a decision, and re-filing the agreement as a
+  // fresh question left #23, #26 and #27 asking about things already settled.
+  if (clarificationShortId !== undefined) {
+    const verdict = parseVerdict(cleanedText.trim());
+    if (verdict.isNoTransaction) {
+      takeByShortId(clarificationShortId, "la descartaste: no era una transacción");
+      await sendLong(
+        ctx,
+        `🚫 #${clarificationShortId} descartada — no es un movimiento.` +
+          (verdict.reason ? `\n_${verdict.reason.slice(0, 200)}_` : "") +
+          ruleNote
+      );
+      return;
+    }
   }
 
   // No CSV: the movement is still unresolved, so the question stays in the

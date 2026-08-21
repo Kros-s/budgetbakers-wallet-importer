@@ -27,9 +27,19 @@ export interface Verdict {
  */
 export function parseVerdict(responseText: string): Verdict {
   const trimmed = responseText.trim();
-  const m = /^NO[_ ]TRANSACTION\b[:.\-–—]?\s*/i.exec(trimmed);
-  if (!m) return { isNoTransaction: false, reason: "" };
-  return { isNoTransaction: true, reason: trimmed.slice(m[0].length).trim() };
+
+  // Leading: "NO_TRANSACTION El correo es un aviso…"
+  const leading = /^NO[_ ]TRANSACTION\b[:.\-–—]?\s*/i.exec(trimmed);
+  if (leading) return { isNoTransaction: true, reason: trimmed.slice(leading[0].length).trim() };
+
+  // Trailing: "Confirmado, se descarta por reembolso. NO_TRANSACTION".
+  // The model reaches for this shape when it agrees with the user, and reading
+  // only the leading form filed those agreements back as fresh questions.
+  const trailing = /[\s.:\-–—]NO[_ ]TRANSACTION\.?$/i.exec(trimmed);
+  if (trailing) {
+    return { isNoTransaction: true, reason: trimmed.slice(0, trailing.index).trim() };
+  }
+  return { isNoTransaction: false, reason: "" };
 }
 
 /** Money written the way Mexican banks write it. */
