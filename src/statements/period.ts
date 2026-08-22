@@ -73,8 +73,17 @@ export function cutDayMismatch(period: StatementPeriod, cutDay: number, toleranc
   return `el estado cierra el día ${closingDay} y el registro dice corte ${cutDay} — ¿es el PDF de esta cuenta?`;
 }
 
-/** Days either side of the period edge where a movement may land in the neighbouring statement. */
-export const BOUNDARY_DAYS = 3;
+/**
+ * Days either side of the period edge where a movement may land in the
+ * neighbouring statement.
+ *
+ * Five, from measuring the real lag between operation and posting across the
+ * user's own statements: Banamex 183 movements, 95% within 3 days and a maximum
+ * of 5 — and only 8% of them posting the same day they happened. BBVA is
+ * tighter (max 2) and Banorte Crédito tighter still (max 1), so the widest bank
+ * sets the window.
+ */
+export const BOUNDARY_DAYS = 5;
 
 /**
  * Is this date close enough to an edge of the period that the movement could

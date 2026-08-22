@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  alreadyInWallet, crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows, toWalletRows,
+  alreadyInWallet, crossTransfers, deferNearBoundary, formatCrossing, orphanTransferLegs,
+  toLedgerRows, toWalletRows,
 } from "../../statements/crossing.js";
 import type { CsvRow } from "../../csv.js";
 
@@ -180,4 +181,26 @@ test("without the operation date the same pair falls outside the window", () => 
     ...rows("Bancomer", r("2026-07-30", "-3268.48", "Transfer, withdraw")),
   ];
   assert.equal(crossTransfers(all).pairs.length, 0);
+});
+
+test("rows at the edge of the month are held back, those inside are not", () => {
+  // 92% of Banamex movements post on a day other than the one they happened,
+  // up to five later. A movement at the end of the month lands on the next
+  // statement, whose account may not be extracted yet — deciding on it before
+  // every account is in is how it gets written from both sides.
+  const period = { from: "2026-07-01", to: "2026-07-31" };
+  const all = [
+    ...rows("Costco", r("2026-07-30", "-100"), r("2026-07-15", "-200"), r("2026-07-03", "-300")),
+  ];
+  const { deferred, inside } = deferNearBoundary(all, period);
+  assert.deepEqual(deferred.map((d) => d.date), ["2026-07-30", "2026-07-03"]);
+  assert.deepEqual(inside.map((d) => d.date), ["2026-07-15"]);
+});
+
+test("a row is held if EITHER of its dates sits at the edge", () => {
+  // Operated on the 30th, posted on the 4th: safe by one date, at the edge by
+  // the other. The edge wins.
+  const late: CsvRow = { ...r("2026-08-04", "-100", "Others"), opdate: "2026-07-30" };
+  const { deferred } = deferNearBoundary(toLedgerRows("Costco", [late]), { from: "2026-07-01", to: "2026-07-31" });
+  assert.equal(deferred.length, 1);
 });

@@ -69,8 +69,10 @@ import { INBOX_DIR } from "../statements/inbox.js";
 import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
 import { listRecordsByDateRange } from "../records.js";
 import {
-  alreadyInWallet, crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows, toWalletRows,
+  alreadyInWallet, crossTransfers, deferNearBoundary, formatCrossing, orphanTransferLegs,
+  toLedgerRows, toWalletRows,
 } from "../statements/crossing.js";
+import { calendarPeriod } from "../statements/period.js";
 import {
   formatReconcileSummary, needsAttention, parseReconcileOutput, reconcileCommand, runReconcile,
 } from "./statement-flow.js";
@@ -963,6 +965,21 @@ export function registerHandlers(deps: HandlerDeps): void {
       parts.push(
         `🤔 *${result.possible.length} coincidencia(s) de monto* sin categoría de traspaso — puede ser casualidad:`,
         "```", formatCrossing(result.possible), "```"
+      );
+    }
+    // Rows at the edge of the month are held back on purpose. A movement made
+    // at month end posts days later — 92% of Banamex's do, up to five — so it
+    // lands on the next statement, whose account may not be extracted yet.
+    const { deferred } = deferNearBoundary(
+      result.unpaired.filter((r) => r.source === "statement"),
+      calendarPeriod(arg)
+    );
+    if (deferred.length) {
+      parts.push(
+        `📅 *${deferred.length} al filo del mes* — en espera, no se deciden hasta tener todas las cuentas:`,
+        "```",
+        deferred.slice(0, 10).map((o) => `${o.date} ${(o.cents / 100).toFixed(2)} ${o.account}`).join("\n"),
+        "```"
       );
     }
     if (orphans.length) {

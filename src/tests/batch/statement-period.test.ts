@@ -61,9 +61,13 @@ test("a movement at the edge of the period is expected, not an anomaly", () => {
   assert.equal(isNearBoundary("2026-07-15", p), false);
 });
 
-test("the boundary reaches just past the edge, where the neighbour's rows sit", () => {
+test("the boundary reaches as far as the widest bank actually posts", () => {
+  // Five days, from Banamex's measured maximum lag between operation and
+  // posting. A tighter window would call one of its real end-of-month
+  // movements settled while its counterpart is still in the next statement.
   const p = { from: "2026-07-01", to: "2026-07-31" };
   assert.equal(isNearBoundary("2026-08-02", p), true);
-  assert.equal(isNearBoundary("2026-08-05", p), false);
+  assert.equal(isNearBoundary("2026-08-05", p), true);
+  assert.equal(isNearBoundary("2026-08-07", p), false);
   assert.equal(isNearBoundary("no es fecha", p), false);
 });

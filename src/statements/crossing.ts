@@ -15,6 +15,7 @@
 
 import type { CsvRow, } from "../csv.js";
 import type { WalletRecord } from "../types.js";
+import { isNearBoundary, type StatementPeriod } from "./period.js";
 
 /** Where a row came from — a statement being staged, or Wallet as it stands. */
 export type RowSource = "statement" | "wallet";
@@ -189,4 +190,35 @@ export function formatCrossing(pairs: TransferPair[]): string {
       return `${p.out.date} $${amount}  ${p.out.account} → ${p.in.account}${gap}${mark(p)}`;
     })
     .join("\n");
+}
+
+export interface BoundarySplit {
+  /** Rows at the edge of the period: hold these until the month is complete. */
+  deferred: LedgerRow[];
+  /** Rows safely inside the period, decidable now. */
+  inside: LedgerRow[];
+}
+
+/**
+ * Holds back the rows at the edges of the month.
+ *
+ * Banks post a movement days after it happens — measured on the user's own
+ * statements, 92% of Banamex movements post on a different day, up to five
+ * later — so one made at the end of the month appears on the next statement,
+ * and the account it pairs with may not have been extracted yet. Deciding on
+ * those before every account is in is how the same movement gets written from
+ * both sides. A row inside the period has no such excuse and can be decided.
+ */
+export function deferNearBoundary(
+  rows: LedgerRow[],
+  period: StatementPeriod,
+  slack?: number
+): BoundarySplit {
+  const deferred: LedgerRow[] = [];
+  const inside: LedgerRow[] = [];
+  for (const r of rows) {
+    const dates = [r.date, ...(r.opTime !== undefined ? [new Date(r.opTime).toISOString().slice(0, 10)] : [])];
+    (dates.some((d) => isNearBoundary(d, period, slack)) ? deferred : inside).push(r);
+  }
+  return { deferred, inside };
 }
