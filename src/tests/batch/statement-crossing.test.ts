@@ -137,3 +137,24 @@ test("the crossing reads as direction and amount", () => {
   assert.match(formatCrossing(crossTransfers(all).possible), /2026-07-01 \$3268\.48\s+Bancomer → Meli/);
   assert.match(formatCrossing([]), /Sin traspasos pareados/);
 });
+
+test("a coincidence does not consume the row it guessed at", () => {
+  // The real case: two Meli charges matched Costco rows of equal size by
+  // accident. Letting that consume them would drop two genuine movements from
+  // whatever decides what to write, with nothing to notice.
+  const all = [
+    ...rows("Meli", r("2026-07-09", "-10", "Others")),
+    ...rows("Costco", r("2026-07-09", "10", "Others")),
+  ];
+  const out = crossTransfers(all);
+  assert.equal(out.possible.length, 1);
+  assert.equal(out.unpaired.length, 2, "ambas siguen pendientes de decisión");
+});
+
+test("a real transfer does consume both its legs", () => {
+  const all = [
+    ...rows("Meli", r("2026-07-01", "3268.48", "Transfer, withdraw")),
+    ...rows("Bancomer", r("2026-07-01", "-3268.48", "Transfer, withdraw")),
+  ];
+  assert.deepEqual(crossTransfers(all).unpaired, []);
+});

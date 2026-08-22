@@ -49,7 +49,11 @@ export interface CrossResult {
    * treating it as a transfer would merge two unrelated movements.
    */
   possible: TransferPair[];
-  /** Rows left over: genuine one-sided movements, or a leg whose other half never arrived. */
+  /**
+   * Rows still unaccounted for. A row named in `possible` stays here: that
+   * bucket is advisory, and letting a coincidence consume a row would quietly
+   * drop a real movement from whatever decides what to write.
+   */
   unpaired: LedgerRow[];
 }
 
@@ -108,7 +112,8 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
   const window = gapDays * 86_400_000;
   const outs = rows.filter((r) => r.cents < 0).sort((a, b) => a.time - b.time);
   const ins = rows.filter((r) => r.cents > 0).sort((a, b) => a.time - b.time);
-  const used = new Set<LedgerRow>();
+  const used = new Set<LedgerRow>();   // matched at all — stops re-matching
+  const settled = new Set<LedgerRow>(); // matched by a REAL transfer pair
   const pairs: TransferPair[] = [];
   const possible: TransferPair[] = [];
 
@@ -127,11 +132,17 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
       used.add(best);
       used.add(out);
       const pair = { out, in: best, gapDays: Math.round(bestGap / 86_400_000) };
-      (isTransferRow(out) || isTransferRow(best) ? pairs : possible).push(pair);
+      if (isTransferRow(out) || isTransferRow(best)) {
+        pairs.push(pair);
+        settled.add(out);
+        settled.add(best);
+      } else {
+        possible.push(pair);
+      }
     }
   }
 
-  return { pairs, possible, unpaired: rows.filter((r) => !used.has(r)) };
+  return { pairs, possible, unpaired: rows.filter((r) => !settled.has(r)) };
 }
 
 /** Statement rows that claim to be a transfer but found no counterpart. */
