@@ -21,6 +21,7 @@ export const BOT_COMMANDS: BotCommandSpec[] = [
   { command: "reset", description: "Empezar una conversación nueva" },
   { command: "audit", description: "Cerrar pendientes que ya están en Wallet" },
   { command: "ignore", description: "Ignorar correos por asunto (/ignore texto)" },
+  { command: "statements", description: "Estados de cuenta: qué mes falta por cuenta" },
   { command: "help", description: "Cómo usar el bot" },
 ];
 
@@ -62,5 +63,6 @@ export const HELP_TEXT = [
   "El filtro mira remitente y asunto, así que puedes ignorar un tipo de aviso sin ignorar al banco entero.",
   "",
   "*Estados de cuenta*",
+  "`/statements` — la tabla por mes y cuenta: ✅ conciliado, ❌ falta, ⬜ todavía no vence.",
   "Mándame el PDF como archivo y lo proceso. No hace falta comando.",
 ].join("\n");

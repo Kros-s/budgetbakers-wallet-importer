@@ -60,6 +60,8 @@ import { addIgnorePattern, listIgnorePatterns, matchesPattern, relaxAccents, toL
 import { formatVerdict, judge } from "../webhook/pending-audit.js";
 import { parseVerdict } from "../webhook/verdict.js";
 import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
+import { formatStatementsTable } from "./statements-view.js";
+import { statementStatus } from "../statements/registry.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
 import { escapeMarkdown, replySafe, sendSafeMessage } from "./telegram-safe.js";
@@ -809,6 +811,14 @@ export function registerHandlers(deps: HandlerDeps): void {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const had = proposedIgnores.delete(ctx.chat!.id);
     await ctx.reply(had ? "🗑️ Regla descartada, nada cambió." : "No había ninguna propuesta.");
+  });
+
+  bot.command("statements", async (ctx) => {
+    await sendSafeMessage(
+      deps.bot.telegram,
+      ctx.chat.id,
+      formatStatementsTable(statementStatus())
+    );
   });
 
   bot.command("help", async (ctx) => {

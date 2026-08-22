@@ -30,6 +30,9 @@ test("the help explains the three ways to answer and the guided window", () => {
 });
 
 test("the help does not promise a command that does not exist", () => {
-  // El resumen del batch prometía /statement, que nunca existió.
-  assert.doesNotMatch(HELP_TEXT, /\/statement/);
+  // El resumen del batch prometía /statement en singular, que nunca existió.
+  // Ya hay /statements en plural, así que la trampa es la inversa: prometer el
+  // singular otra vez. El guardián de arriba cubre el resto de los comandos.
+  assert.doesNotMatch(HELP_TEXT, /\/statement(?!s)/);
+  assert.ok(BOT_COMMANDS.some((c) => c.command === "statements"));
 });
