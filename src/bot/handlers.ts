@@ -66,6 +66,8 @@ import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
 import { formatStatementsTable } from "./statements-view.js";
 import { DETECTION_PROMPT, looksLikeStatement, monthOf, parseDetection, resolveAccount } from "../statements/detect.js";
 import { INBOX_DIR } from "../statements/inbox.js";
+import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
+import { crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows } from "../statements/crossing.js";
 import {
   formatReconcileSummary, needsAttention, parseReconcileOutput, reconcileCommand, runReconcile,
 } from "./statement-flow.js";
@@ -818,8 +820,6 @@ export function registerHandlers(deps: HandlerDeps): void {
   // A dry run is proposed, never applied. The write pass replays the stored
   // extraction rather than reading the PDF again, so what gets committed is
   // exactly the diff that was shown.
-  const proposedStatements = new Map<number, { pdf: string; account: string; month: string }>();
-
   async function tryStatementRoute(
     d: HandlerDeps,
     chatId: number,
@@ -869,63 +869,77 @@ export function registerHandlers(deps: HandlerDeps): void {
 
     const summary = parseReconcileOutput(run.stdout);
     const msg = formatReconcileSummary(account, month, summary);
-    const blocked = needsAttention(summary);
 
-    if (blocked || summary.missing === 0) {
-      await sendSafeMessage(
-        d.bot.telegram, chatId,
-        `${msg}\n\n${summary.missing === 0 ? "_Nada que agregar._" : "_No propongo escribir con esto sin resolver._"}`
-      );
-      return true;
-    }
+    // Nothing is offered for writing account by account. A transfer whose other
+    // leg is in a statement that has not arrived yet would be booked alone and
+    // duplicated when the counterpart shows up; only the complete month can
+    // answer "does this movement already exist somewhere". So the extraction is
+    // banked and the month's coverage reported.
+    const coverage = monthCoverage(month);
+    const tail = coverage.complete
+      ? `\n\n${formatCoverage(coverage)}\n_Ya se puede cruzar el mes: \`/cross ${month}\`._`
+      : `\n\n${formatCoverage(coverage)}\n_Guardado. No escribo nada hasta tener el mes completo._`;
 
-    proposedStatements.set(chatId, { pdf: filed, account, month });
-    await d.bot.telegram.sendMessage(chatId, msg, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [[
-          { text: `✍️ Escribir ${summary.missing}`, callback_data: "confirm_statement" },
-          { text: "🗑️ Descartar", callback_data: "cancel_statement" },
-        ]],
-      },
-    });
+    await sendSafeMessage(
+      d.bot.telegram, chatId,
+      needsAttention(summary) ? `${msg}\n\n_Esto hay que resolverlo antes de cruzar._${tail}` : `${msg}${tail}`
+    );
     return true;
   }
-
-  bot.action("confirm_statement", async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-    const proposed = proposedStatements.get(ctx.chat!.id);
-    if (!proposed) {
-      await ctx.reply("Esa conciliación ya no está vigente. Vuelve a mandar el PDF.");
-      return;
-    }
-    proposedStatements.delete(ctx.chat!.id);
-    await ctx.reply(`✍️ Escribiendo ${proposed.account} · ${proposed.month}…`);
-
-    const run = await runReconcile(
-      reconcileCommand({ ...proposed, write: true, fromLedger: true })
-    );
-    await sendSafeMessage(
-      deps.bot.telegram, ctx.chat!.id,
-      run.ok
-        ? `✅ *${proposed.account} · ${proposed.month}* escrito.\n\`\`\`\n${run.stdout.slice(-700)}\n\`\`\``
-        : `❌ Falló al escribir:\n\`\`\`\n${(run.stderr || run.stdout).slice(-600)}\n\`\`\``
-    );
-  });
-
-  bot.action("cancel_statement", async (ctx) => {
-    await ctx.answerCbQuery();
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-    const had = proposedStatements.delete(ctx.chat!.id);
-    await ctx.reply(had ? "🗑️ Descartada, nada se escribió en Wallet." : "No había ninguna conciliación pendiente.");
-  });
 
   bot.action("cancel_ignore", async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const had = proposedIgnores.delete(ctx.chat!.id);
     await ctx.reply(had ? "🗑️ Regla descartada, nada cambió." : "No había ninguna propuesta.");
+  });
+
+  bot.command("cross", async (ctx) => {
+    const arg = ctx.message.text.split(/\s+/)[1]?.trim() ?? "";
+    if (!/^\d{4}-\d{2}$/.test(arg)) {
+      await ctx.reply("Uso: `/cross 2026-07`", { parse_mode: "Markdown" });
+      return;
+    }
+    const coverage = monthCoverage(arg);
+    if (!coverage.complete) {
+      // Crossing a partial month is worse than not crossing it: a leg whose
+      // counterpart is in a statement that has not arrived reads as one-sided,
+      // and acting on that is exactly how it gets written twice.
+      await sendSafeMessage(
+        deps.bot.telegram, ctx.chat.id,
+        `⏳ *${arg}* todavía no se puede cruzar.\n\n${formatCoverage(coverage)}\n\n` +
+          `_Cruzar un mes incompleto marca como suelta una pata cuyo otro lado no ha llegado._`
+      );
+      return;
+    }
+
+    const all = coverage.have.flatMap((account) => {
+      const led = loadLedger(account, arg);
+      return led ? toLedgerRows(account, led.rows) : [];
+    });
+    const result = crossTransfers(all);
+    const orphans = orphanTransferLegs(result);
+    const totals = coverage.have
+      .map((a) => {
+        const led = loadLedger(a, arg);
+        const n = led?.rows.length ?? 0;
+        const sum = (led?.rows ?? []).reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
+        return `${a.padEnd(20).slice(0, 20)} ${String(n).padStart(4)}  ${sum.toFixed(2).padStart(12)}`;
+      })
+      .join("\n");
+
+    const msg =
+      `🔀 *Cruce de ${arg}* · ${coverage.have.length} cuentas · ${all.length} movimientos\n\n` +
+      `\`\`\`\n${totals}\n\`\`\`\n` +
+      `*Traspasos pareados entre cuentas: ${result.pairs.length}*\n` +
+      `\`\`\`\n${formatCrossing(result)}\n\`\`\`\n` +
+      (orphans.length
+        ? `⚠️ *${orphans.length} pata(s) de traspaso sin contraparte*\n` +
+          `\`\`\`\n${orphans.map((o) => `${o.row.date.slice(0, 10)} ${(o.cents / 100).toFixed(2)} ${o.account}`).join("\n")}\n\`\`\`\n` +
+          `_Revísalas antes de escribir: puede faltar un estado, o el otro lado ya estar en Wallet._`
+        : `✅ Ninguna pata de traspaso quedó suelta.`);
+
+    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, msg);
   });
 
   bot.command("statements", async (ctx) => {

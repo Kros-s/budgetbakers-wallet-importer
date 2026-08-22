@@ -22,6 +22,7 @@ export const BOT_COMMANDS: BotCommandSpec[] = [
   { command: "audit", description: "Cerrar pendientes que ya están en Wallet" },
   { command: "ignore", description: "Ignorar correos por asunto (/ignore texto)" },
   { command: "statements", description: "Estados de cuenta: qué mes falta por cuenta" },
+  { command: "cross", description: "Cruzar un mes completo (/cross 2026-07)" },
   { command: "help", description: "Cómo usar el bot" },
 ];
 
@@ -67,4 +68,8 @@ export const HELP_TEXT = [
   "Mándame el PDF como archivo y lo proceso. No hace falta comando: identifico el banco y el periodo, ",
   "lo comparo contra Wallet y te muestro el diff. Nada se escribe hasta que le des al botón.",
   "Si algo no cuadra contra los totales del propio estado, te lo digo y no te ofrezco escribir.",
+  "",
+  "No escribo cuenta por cuenta: guardo cada extracción y espero a tener el mes completo.",
+  "Un traspaso cuya otra pata está en un estado que no ha llegado se vería suelto, y escribirlo así lo duplica.",
+  "`/cross 2026-07` — con el mes completo, cruza todas las cuentas: parea los traspasos entre ellas y te muestra el panorama.",
 ].join("\n");
