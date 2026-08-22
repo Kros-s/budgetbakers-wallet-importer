@@ -291,7 +291,10 @@ async function main() {
         counts.no_transaction++;
         continue;
       }
-      const result = await processEmail(deps, { from: env.from, subject: env.subject, text, date: env.date.toISOString() });
+      const result = await processEmail(deps, {
+        from: env.from, subject: env.subject, text,
+        date: env.date.toISOString(), uid: env.uid, folder: args.folder,
+      });
       if (result.status === "written") {
         counts.written += result.written;
         appendRecords(ledger, (result.writtenIds ?? []).map((id) => ({

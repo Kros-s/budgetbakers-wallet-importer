@@ -29,6 +29,15 @@ export interface ClarificationEntry {
   emailText: string;
   /** ISO date the email was received, when the caller knew it. */
   emailDate?: string;
+  /**
+   * IMAP uid and folder, so the original can be read again.
+   *
+   * Some notifications carry no date in the body at all — Mercado Pago's
+   * "Ya enviamos tu transferencia de $700" is the whole message — and three
+   * identical ones a month apart are indistinguishable without the envelope.
+   */
+  emailUid?: number;
+  emailFolder?: string;
   claudeQuestion: string;
   createdAt: number;
 }

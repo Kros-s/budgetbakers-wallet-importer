@@ -77,6 +77,9 @@ export interface EmailPayload {
   text: string;
   /** ISO date the email was received, so the queue can show it later. */
   date?: string;
+  /** IMAP coordinates, so the original can be fetched again if needed. */
+  uid?: number;
+  folder?: string;
 }
 
 /**
@@ -211,6 +214,8 @@ export async function processEmail(
       emailSubject: payload.subject,
       emailText: payload.text,
       emailDate: payload.date,
+      emailUid: payload.uid,
+      emailFolder: payload.folder,
       claudeQuestion: effectiveText,
       createdAt: Date.now(),
     });
