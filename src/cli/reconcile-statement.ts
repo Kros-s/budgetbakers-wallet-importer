@@ -33,6 +33,8 @@ import { listRecordsByDateRange, writeRecords } from "../records.js";
 import { CATALOG_PROMPT } from "../webhook/email-processor.js";
 import { markReceived } from "../statements/registry.js";
 import { retireStatement } from "../statements/inbox.js";
+import { loadRegistry } from "../statements/registry.js";
+import { calendarPeriod, cutDayMismatch, parsePeriodLine, walletWindow } from "../statements/period.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -94,7 +96,10 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- NO incluyas: intereses resumidos sin movimiento, saldos, totales, ni líneas informativas.\n` +
     `- Incluye comisiones y cargos del banco como movimientos ("Charges, Fees").\n\n` +
     `${CATALOG_PROMPT}\n\n` +
-    `Al final, después del bloque CSV, agrega una línea "TOTAL_MOVIMIENTOS: <n>" con el número de filas.\n` +
+    `Al final, después del bloque CSV, agrega DOS líneas:\n` +
+    `- "TOTAL_MOVIMIENTOS: <n>" con el número de filas.\n` +
+    `- "PERIODO: <inicio>..<fin>" en YYYY-MM-DD, con el periodo que el propio estado declara ` +
+    `(busca "Periodo", "Fecha de corte", "Fecha inicio/fin"). Cópialo del PDF; no lo deduzcas del nombre del archivo.\n` +
     `Si el PDF no se puede leer (protegido/corrupto), responde solo: PDF_UNREADABLE`
   );
 }
@@ -179,19 +184,38 @@ async function main() {
     console.warn(`⚠️ El conteo declarado (${claimed}) no coincide con las filas (${rows.length}) — revisar extracción.`);
   }
 
+  const declared = parsePeriodLine(result.text);
+
   // ── Persist normalized statement ledger ──
   const ledgerPath = path.resolve(`data/statements/ledger-${profileSlug(args.account)}-${args.month}.json`);
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   fs.writeFileSync(ledgerPath, JSON.stringify({
     account: args.account, month: args.month, extractedAt: new Date().toISOString(),
+    period: declared,
     sourcePdf: path.basename(args.pdf), rows,
   }, null, 2));
   console.log(`Ledger del estado: ${ledgerPath}`);
 
   // ── Diff vs Wallet ──
-  const [y, m] = args.month.split("-").map(Number);
-  const from = new Date(y, m - 1, 1 - DATE_SLACK_DAYS).toISOString();
-  const to = new Date(y, m, DATE_SLACK_DAYS + 1).toISOString();
+  // The window follows the statement's own period. Using the calendar month
+  // instead left a mid-month cut comparing against records it never covered,
+  // and every unmatched row was a duplicate waiting for --write.
+  if (!declared) {
+    console.warn(
+      `⚠️ El estado no declaró su periodo — se compara contra el mes calendario ${args.month}. ` +
+        `Si esta cuenta corta a media mes, revisa el diff con cuidado antes de --write.`
+    );
+  }
+  const period = declared ?? calendarPeriod(args.month);
+  console.log(`Periodo del estado: ${period.from} → ${period.to}${declared ? "" : " (supuesto)"}`);
+
+  const cutDay = loadRegistry()[args.account]?.cutDay;
+  if (declared && cutDay !== undefined) {
+    const warn = cutDayMismatch(period, cutDay);
+    if (warn) console.warn(`⚠️ ${warn}`);
+  }
+
+  const { from, to } = walletWindow(period, DATE_SLACK_DAYS);
   const existing = await listRecordsByDateRange(couch, from, to);
   const d = diff(rows, existing, accountId);
 

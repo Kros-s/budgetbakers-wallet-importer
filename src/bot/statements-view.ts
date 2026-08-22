@@ -40,11 +40,17 @@ function code(month: string): string {
 }
 
 /**
- * The months the grid shows: `count` of them, ending with the month before
- * today. The current month is never included — its statement cannot be due yet.
+ * The months the grid shows: `count` of them, ending with the newest month
+ * anything is actually owed for, or the month before today when nothing is.
+ *
+ * It used to end unconditionally at the previous month. An account whose cut
+ * has already passed this month can owe the CURRENT month, and that column fell
+ * off the right edge — the one gap most worth seeing, invisible.
  */
-export function gridMonths(today: Date, count: number): string[] {
-  const last = addMonths(monthKey(today), -1);
+export function gridMonths(today: Date, count: number, missing: string[] = []): string[] {
+  const newestOwed = missing.length ? missing.reduce((a, b) => (a > b ? a : b)) : "";
+  const prev = addMonths(monthKey(today), -1);
+  const last = newestOwed > prev ? newestOwed : prev;
   return Array.from({ length: count }, (_, i) => addMonths(last, i - count + 1));
 }
 
@@ -85,7 +91,7 @@ export function formatStatementsTable(
     return "📄 *Estados de cuenta*\n\nNo hay ninguna cuenta en el registro todavía.";
   }
 
-  const months = gridMonths(today, monthCount);
+  const months = gridMonths(today, monthCount, statuses.flatMap((s) => s.missing));
   const header = `${" ".repeat(NAME_WIDTH)} ${months.map(code).join(" ")}`;
   const rows = ranked(statuses).map((s) => {
     return `${truncate(s.account)} ${months.map((m) => cellFor(s, m)).join(" ")}`;

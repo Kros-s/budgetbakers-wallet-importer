@@ -75,3 +75,23 @@ test("gaps older than the grid are named, not silently dropped", () => {
 test("an empty registry says it is empty", () => {
   assert.match(formatStatementsTable([], AUG), /No hay ninguna cuenta en el registro/);
 });
+
+test("a gap in the current month is shown, not pushed off the right edge", () => {
+  // An account whose cut already passed this month owes the CURRENT month. The
+  // grid used to stop at the previous one and hid exactly that column.
+  const out = formatStatementsTable(
+    [status({ account: "Costco", lastReceived: "2026-07", missing: ["2026-08"] })],
+    AUG
+  );
+  assert.match(out.split("```")[1], /ag/, "la columna de agosto aparece");
+  assert.match(out, /Faltan \*1\* mes/);
+  assert.doesNotMatch(out, /no caben en la tabla/);
+});
+
+test("with nothing owed the grid still ends at the previous month", () => {
+  assert.deepEqual(gridMonths(AUG, 3, []), ["2026-05", "2026-06", "2026-07"]);
+});
+
+test("the grid stretches to cover the newest month owed", () => {
+  assert.deepEqual(gridMonths(AUG, 3, ["2026-06", "2026-08"]), ["2026-06", "2026-07", "2026-08"]);
+});

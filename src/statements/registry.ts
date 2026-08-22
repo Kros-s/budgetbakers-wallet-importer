@@ -73,15 +73,21 @@ export interface MissingStatement {
 /**
  * The newest month whose statement is already due for this account: its cut day
  * plus the grace period has passed.
+ *
+ * A month's statement cuts within THAT SAME month, not the following one. The
+ * code used to assume the opposite, which put every account a month behind
+ * reality: Meli's "julio" statement closes 21-jul and the registry would not
+ * chase it until 26-ago. Checked against fourteen real statements from seven
+ * banks — Banamex, BBVA, Banorte débito and crédito, Mercado Pago, MIFEL,
+ * Klar — and all seven name the month their cut falls in.
  */
 function lastDueMonth(entry: RegistryEntry, today: Date): string | null {
   const grace = entry.graceDays ?? 5;
   const cut = Math.min(entry.cutDay, 28);
-  // A month's statement is due once cutDay+grace of the FOLLOWING month passed.
-  const dueForPrev = new Date(today.getFullYear(), today.getMonth(), cut + grace);
-  const anchor = today >= dueForPrev
-    ? new Date(today.getFullYear(), today.getMonth() - 1, 1)
-    : new Date(today.getFullYear(), today.getMonth() - 2, 1);
+  const dueThisMonth = new Date(today.getFullYear(), today.getMonth(), cut + grace);
+  const anchor = today >= dueThisMonth
+    ? new Date(today.getFullYear(), today.getMonth(), 1)
+    : new Date(today.getFullYear(), today.getMonth() - 1, 1);
   return monthKey(anchor);
 }
 
@@ -98,9 +104,11 @@ export function missingStatements(today = new Date()): MissingStatement[] {
   for (const [account, e] of Object.entries(reg)) {
     const last = lastDueMonth(e, today);
     if (!last) continue;
+    // Anchored on the last DUE month, not on today: counting back from today
+    // yielded one month more than the cap promised.
     const from = e.lastReceived
       ? addMonths(e.lastReceived, 1)
-      : e.startMonth ?? addMonths(monthKey(today), -DEFAULT_LOOKBACK_MONTHS);
+      : e.startMonth ?? addMonths(last, -(DEFAULT_LOOKBACK_MONTHS - 1));
     for (let m = from; m <= last; m = addMonths(m, 1)) {
       out.push({ account, month: m, source: e.source });
     }

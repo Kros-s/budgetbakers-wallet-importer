@@ -24,11 +24,31 @@ after(() => {
 test("nothing is chased before the cut plus its grace", () => {
   saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: "2026-05", startMonth: "2026-06" } });
 
-  // Aug 12: the 10th + 5 days has not passed, so July is not due yet.
-  assert.deepEqual(missingStatements(new Date("2026-08-12T12:00:00")).map((m) => m.month), ["2026-06"]);
+  // Aug 12: August cuts on the 10th, and its 5 days of grace have not run out,
+  // so August is not chased yet.
+  assert.deepEqual(missingStatements(new Date("2026-08-12T12:00:00")).map((m) => m.month), ["2026-06", "2026-07"]);
 
-  // Aug 16: past 10+5, so July joins it.
-  assert.deepEqual(missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month), ["2026-06", "2026-07"]);
+  // Aug 16: past 10+5, so August joins them.
+  assert.deepEqual(
+    missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month),
+    ["2026-06", "2026-07", "2026-08"]
+  );
+});
+
+test("a month is chased once its OWN cut has passed, not the next month's", () => {
+  // Every real statement checked names the month its cut falls in: Meli closes
+  // "julio" on 21-jul. Assuming the cut landed in the following month put the
+  // whole registry a month behind — /statements showed ⬜ for a month the user
+  // already had the PDF for.
+  saveRegistry({ Meli: { cutDay: 21, source: "manual", lastReceived: "2026-06" } });
+  const hoy = new Date("2026-08-22T12:00:00");
+  assert.deepEqual(missingStatements(hoy).map((m) => m.month), ["2026-07"]);
+
+  // And August is not chased until the 26th — its cut plus grace.
+  assert.deepEqual(
+    missingStatements(new Date("2026-08-27T12:00:00")).map((m) => m.month),
+    ["2026-07", "2026-08"]
+  );
 });
 
 test("every missing month is reported, not only the most recent", () => {
@@ -36,31 +56,35 @@ test("every missing month is reported, not only the most recent", () => {
   // mentioned again — the reconciliation quietly narrowed to the newest.
   saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: "2026-04" } });
   const months = missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month);
-  assert.deepEqual(months, ["2026-05", "2026-06", "2026-07"]);
+  assert.deepEqual(months, ["2026-05", "2026-06", "2026-07", "2026-08"]);
 });
 
 test("an account never reconciled is chased from its startMonth", () => {
   saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: null, startMonth: "2026-07" } });
-  assert.deepEqual(missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month), ["2026-07"]);
+  assert.deepEqual(
+    missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month),
+    ["2026-07", "2026-08"]
+  );
 });
 
 test("without a startMonth the lookback is capped, not unbounded", () => {
   saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: null } });
   const months = missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month);
   assert.equal(months.length, 6, "debería mirar 6 meses hacia atrás, no desde el principio de los tiempos");
-  assert.equal(months[months.length - 1], "2026-07");
+  assert.equal(months[0], "2026-03");
+  assert.equal(months[months.length - 1], "2026-08");
 });
 
 test("the status view pairs each account with what it owes", async () => {
   const { statementStatus } = await import("../../statements/registry.js");
   saveRegistry({
     Costco: { cutDay: 10, source: "manual", lastReceived: "2026-06" },
-    "Open bank": { cutDay: 1, source: "email", lastReceived: "2026-07" },
+    "Open bank": { cutDay: 1, source: "email", lastReceived: "2026-08" },
   });
   const status = statementStatus(new Date("2026-08-16T12:00:00"));
   const costco = status.find((s) => s.account === "Costco");
   assert.ok(costco);
-  assert.deepEqual(costco.missing, ["2026-07"]);
+  assert.deepEqual(costco.missing, ["2026-07", "2026-08"]);
   const open = status.find((s) => s.account === "Open bank");
   assert.ok(open);
   assert.deepEqual(open.missing, []);
@@ -68,12 +92,12 @@ test("the status view pairs each account with what it owes", async () => {
 
 test("received statement stops the nag; older months don't regress it", () => {
   saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: null } });
-  markReceived("Costco", "2026-07");
+  markReceived("Costco", "2026-08");
   assert.deepEqual(missingStatements(new Date("2026-08-16T12:00:00")), []);
-  assert.equal(loadRegistry().Costco.lastReceived, "2026-07");
+  assert.equal(loadRegistry().Costco.lastReceived, "2026-08");
 
   markReceived("Costco", "2026-05"); // late arrival of an old one
-  assert.equal(loadRegistry().Costco.lastReceived, "2026-07");
+  assert.equal(loadRegistry().Costco.lastReceived, "2026-08");
 });
 
 test("unknown account in markReceived is a no-op", () => {
