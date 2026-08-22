@@ -35,6 +35,7 @@ import { markReceived } from "../statements/registry.js";
 import { retireStatement } from "../statements/inbox.js";
 import { loadRegistry } from "../statements/registry.js";
 import { calendarPeriod, cutDayMismatch, parsePeriodLine, walletWindow } from "../statements/period.js";
+import { chargesMismatch, parseDeclaredCharges } from "../statements/extraction.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -81,7 +82,11 @@ function buildExtractionPrompt(args: Args, profile: string): string {
   return (
     `${profileSection}Lee el estado de cuenta PDF en ${args.pdf} usando la herramienta Read ` +
     `(usa el parámetro pages en tandas si es largo; asegúrate de cubrir TODAS las páginas con movimientos).\n\n` +
-    `Extrae TODOS los movimientos del periodo ${args.month} de la cuenta "${args.account}" y emite un único bloque CSV:\n\n` +
+    `Primero localiza el PERIODO que el propio estado declara (p.ej. "Periodo: 22 junio - 21 julio"). ` +
+    `Extrae TODOS los movimientos de ESE periodo completo de la cuenta "${args.account}".\n` +
+    `El periodo puede abarcar dos meses calendario: si empieza en junio y cierra en julio, los de junio ` +
+    `TAMBIÉN van. NO recortes al mes ${args.month} — ese es solo la etiqueta del estado.\n\n` +
+    `Emite un único bloque CSV:\n\n` +
     `<<<CSV>>>\n` +
     `date,account,amount,category,note,payee\n` +
     `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ\n` +
@@ -99,7 +104,8 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `Al final, después del bloque CSV, agrega DOS líneas:\n` +
     `- "TOTAL_MOVIMIENTOS: <n>" con el número de filas.\n` +
     `- "PERIODO: <inicio>..<fin>" en YYYY-MM-DD, con el periodo que el propio estado declara ` +
-    `(busca "Periodo", "Fecha de corte", "Fecha inicio/fin"). Cópialo del PDF; no lo deduzcas del nombre del archivo.\n` +
+    `(busca "Periodo", "Fecha de corte", "Fecha inicio/fin"). Cópialo del PDF; no lo deduzcas del nombre del archivo.\n` +    `- "CARGOS_DECLARADOS: <n>" con el total de cargos/compras del periodo TAL COMO lo declara el estado ` +
+    `en su resumen (no lo sumes tú). Si el estado no da ese total, escribe "CARGOS_DECLARADOS: NA".\n` +
     `Si el PDF no se puede leer (protegido/corrupto), responde solo: PDF_UNREADABLE`
   );
 }
@@ -184,6 +190,15 @@ async function main() {
     console.warn(`⚠️ El conteo declarado (${claimed}) no coincide con las filas (${rows.length}) — revisar extracción.`);
   }
 
+  // The row count is self-reported and stays consistent when a movement is
+  // dropped. The statement's own totals are the only figure the extractor
+  // cannot satisfy by being self-consistent.
+  const chargeWarn = chargesMismatch(rows, parseDeclaredCharges(result.text));
+  if (chargeWarn) {
+    console.warn(`⚠️ Cuadre contra el estado: ${chargeWarn}.`);
+    console.warn(`   NO uses --write hasta resolverlo: escribiría un mes incompleto.`);
+  }
+
   const declared = parsePeriodLine(result.text);
 
   // ── Persist normalized statement ledger ──
@@ -232,9 +247,18 @@ async function main() {
     return;
   }
 
+  if (chargeWarn) {
+    throw new Error(
+      `El extracto no cuadra contra los totales del estado (${chargeWarn}). ` +
+        `--write escribiría un mes incompleto; corrige la extracción primero.`
+    );
+  }
+
   // ── Write missing (unambiguous only) ──
+  let skippedRows = 0;
   if (d.missing.length > 0) {
     const { records, skipped } = convertRows(d.missing, lookup);
+    skippedRows = skipped.length;
     if (skipped.length > 0) {
       console.warn(`⚠️ ${skipped.length} fila(s) no convirtieron y NO se escriben: ${skipped.map((s) => s.reason).join("; ")}`);
     }
@@ -246,7 +270,10 @@ async function main() {
   markReceived(args.account, args.month);
 
   // The PDF has served its purpose — unless something in it is still unresolved.
-  const retired = retireStatement(args.pdf, d.ambiguous.length);
+  // A skipped row counts as unresolved: a lone transfer leg (a card payment
+  // whose other side lives in another account) is refused by design, and it is
+  // the PDF you go back to when you come to pair it.
+  const retired = retireStatement(args.pdf, d.ambiguous.length + skippedRows);
   console.log(retired.removed ? `🗑️ PDF retirado: ${retired.reason}.` : `📎 PDF conservado: ${retired.reason}.`);
 
   const bot = new Telegraf(config.telegramBotToken);

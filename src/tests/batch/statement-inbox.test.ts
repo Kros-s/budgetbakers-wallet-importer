@@ -51,6 +51,15 @@ test("an ambiguous row keeps the PDF alive", () => {
   assert.equal(fs.existsSync(pdf), true);
 });
 
+test("a row that could not be written keeps the PDF too", () => {
+  // A lone transfer leg — a card payment whose other side lives in another
+  // account — is refused by design, and the PDF is what you come back to when
+  // you pair it. retireStatement sees ambiguous + skipped as one count.
+  const pdf = put("meli-2026-07.pdf");
+  assert.equal(retireStatement(pdf, 1).removed, false);
+  assert.equal(fs.existsSync(pdf), true);
+});
+
 test("a PDF outside the inbox is never deleted", () => {
   // The user may reconcile a file straight out of their Downloads folder.
   const outside = path.join(scratch, "mi-estado.pdf");
