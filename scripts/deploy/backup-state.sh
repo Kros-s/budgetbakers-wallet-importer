@@ -25,6 +25,7 @@ cd "$APP_DIR"
 tar czf "$OUT" \
   --exclude="data/backups-full" \
   --exclude="data/statements/inbox" \
+  --exclude="data/downloads" \
   --exclude="data/bot/*.log" \
   --exclude="data/*/debug" \
   data .env.local

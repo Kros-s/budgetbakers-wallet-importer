@@ -63,7 +63,10 @@ export function loadBotConfig(): BotConfig {
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
     allowedChatIds: parseChatIds(requireEnv("TELEGRAM_ALLOWED_CHAT_IDS")),
-    downloadDir: process.env.TELEGRAM_DOWNLOAD_DIR?.trim() || os.tmpdir(),
+    // Not os.tmpdir(): a bank statement sent over Telegram used to land in /tmp
+    // and stay there for good — outside data/, so no sweep ever saw it. Under
+    // data/ it is at least swept on a known schedule.
+    downloadDir: process.env.TELEGRAM_DOWNLOAD_DIR?.trim() || path.resolve("data/downloads"),
     claudeBin: process.env.CLAUDE_BIN?.trim() || "claude",
     claudeCwd: process.env.CLAUDE_CWD?.trim() || path.resolve(process.cwd()),
     claudeModel: process.env.CLAUDE_MODEL?.trim() || null,

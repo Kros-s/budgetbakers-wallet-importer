@@ -15,6 +15,9 @@ import { pruneOldFiles, type PruneResult } from "../batch/retention.js";
 
 export const INBOX_DIR = path.resolve("data/statements/inbox");
 
+/** Where Telegram attachments land before anyone decides what they are. */
+export const DOWNLOADS_DIR = path.resolve("data/downloads");
+
 /** Two months, matching what the user asked to hold at most. */
 export const STATEMENT_RETENTION_DAYS = 60;
 
@@ -51,6 +54,23 @@ export function retireStatement(pdfPath: string, ambiguousCount: number): Retire
   } catch (err) {
     return { removed: false, reason: `no se pudo borrar: ${err instanceof Error ? err.message : err}` };
   }
+}
+
+/**
+ * Everything Telegram handed us — receipts, voice notes, and statements the
+ * user sent without filing them. Shorter than the inbox floor because nothing
+ * here was deliberately kept: it is a landing strip, not a shelf.
+ */
+export const DOWNLOAD_RETENTION_DAYS = 15;
+
+export function pruneDownloads(now?: number): PruneResult {
+  return pruneOldFiles({
+    dir: DOWNLOADS_DIR,
+    pattern: /^bot_/,
+    maxAgeDays: DOWNLOAD_RETENTION_DAYS,
+    keepNewest: 0,
+    now,
+  });
 }
 
 /**

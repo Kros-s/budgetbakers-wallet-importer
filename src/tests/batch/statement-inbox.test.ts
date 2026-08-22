@@ -9,8 +9,10 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-test-"));
 const originalCwd = process.cwd();
 process.chdir(scratch);
 
-const { INBOX_DIR, STATEMENT_RETENTION_DAYS, pruneStatementInbox, retireStatement } =
-  await import("../../statements/inbox.js");
+const {
+  DOWNLOADS_DIR, DOWNLOAD_RETENTION_DAYS, INBOX_DIR, STATEMENT_RETENTION_DAYS,
+  pruneDownloads, pruneStatementInbox, retireStatement,
+} = await import("../../statements/inbox.js");
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -87,4 +89,38 @@ test("the sweep ignores anything that is not a PDF", () => {
 
 test("a missing inbox is not an error", () => {
   assert.deepEqual(pruneStatementInbox(), { deleted: [], kept: 0 });
+});
+
+function putDownload(name: string, ageDays: number): string {
+  fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+  const full = path.join(DOWNLOADS_DIR, name);
+  fs.writeFileSync(full, "x");
+  const when = new Date(Date.now() - ageDays * DAY);
+  fs.utimesSync(full, when, when);
+  return full;
+}
+
+test("a statement sent over Telegram is swept from the landing strip", () => {
+  // These used to land in os.tmpdir() and stay there for good — a full month of
+  // movements, in the clear, that no sweep could see.
+  const old = putDownload("bot_123_9.pdf", DOWNLOAD_RETENTION_DAYS + 1);
+  const fresh = putDownload("bot_123_10.pdf", 2);
+  assert.deepEqual(pruneDownloads().deleted, ["bot_123_9.pdf"]);
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(fresh), true);
+});
+
+test("the landing strip sweep leaves foreign files alone", () => {
+  fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+  const mine = path.join(DOWNLOADS_DIR, "notas-mias.pdf");
+  fs.writeFileSync(mine, "x");
+  const when = new Date(Date.now() - 400 * DAY);
+  fs.utimesSync(mine, when, when);
+  assert.deepEqual(pruneDownloads().deleted, []);
+  assert.equal(fs.existsSync(mine), true);
+});
+
+test("downloads are swept sooner than the statement shelf", () => {
+  // Nothing in downloads was deliberately kept; the inbox is a decision.
+  assert.ok(DOWNLOAD_RETENTION_DAYS < STATEMENT_RETENTION_DAYS);
 });
