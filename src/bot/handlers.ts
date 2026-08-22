@@ -67,7 +67,10 @@ import { formatStatementsTable } from "./statements-view.js";
 import { DETECTION_PROMPT, looksLikeStatement, monthOf, parseDetection, resolveAccount } from "../statements/detect.js";
 import { INBOX_DIR } from "../statements/inbox.js";
 import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
-import { crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows } from "../statements/crossing.js";
+import { listRecordsByDateRange } from "../records.js";
+import {
+  alreadyInWallet, crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows, toWalletRows,
+} from "../statements/crossing.js";
 import {
   formatReconcileSummary, needsAttention, parseReconcileOutput, reconcileCommand, runReconcile,
 } from "./statement-flow.js";
@@ -901,45 +904,89 @@ export function registerHandlers(deps: HandlerDeps): void {
       return;
     }
     const coverage = monthCoverage(arg);
-    if (!coverage.complete) {
-      // Crossing a partial month is worse than not crossing it: a leg whose
-      // counterpart is in a statement that has not arrived reads as one-sided,
-      // and acting on that is exactly how it gets written twice.
-      await sendSafeMessage(
-        deps.bot.telegram, ctx.chat.id,
-        `⏳ *${arg}* todavía no se puede cruzar.\n\n${formatCoverage(coverage)}\n\n` +
-          `_Cruzar un mes incompleto marca como suelta una pata cuyo otro lado no ha llegado._`
-      );
+    if (coverage.have.length === 0) {
+      await ctx.reply(`No hay ninguna extracción de ${arg} todavía. Mándame los PDFs.`);
       return;
     }
+    await ctx.reply(`🔀 Cruzando ${arg}…`);
 
-    const all = coverage.have.flatMap((account) => {
+    // Wallet goes into the crossing alongside the statements. Without it the
+    // month can only see the PDFs that arrived, so a payment already recorded
+    // reads as a missing movement — which is the duplicate we are here to
+    // avoid. It also makes a partial month useful: a leg can settle against
+    // what is already booked even if its statement never comes.
+    const [y, m] = arg.split("-").map(Number);
+    const existing = await listRecordsByDateRange(
+      deps.couch,
+      new Date(y, m - 1, -3).toISOString(),
+      new Date(y, m, 4).toISOString()
+    );
+    const namesById: Record<string, string> = {};
+    for (const [name, id] of Object.entries(deps.lookup.accounts)) namesById[id] = name;
+
+    const fromStatements = coverage.have.flatMap((account) => {
       const led = loadLedger(account, arg);
       return led ? toLedgerRows(account, led.rows) : [];
     });
-    const result = crossTransfers(all);
+    const fromWallet = toWalletRows(existing, namesById, deps.lookup.transferCategoryId ?? undefined);
+    const result = crossTransfers([...fromStatements, ...fromWallet]);
+    const already = alreadyInWallet(result);
     const orphans = orphanTransferLegs(result);
+
     const totals = coverage.have
       .map((a) => {
         const led = loadLedger(a, arg);
         const n = led?.rows.length ?? 0;
         const sum = (led?.rows ?? []).reduce((t, r) => t + (parseFloat(r.amount) || 0), 0);
-        return `${a.padEnd(20).slice(0, 20)} ${String(n).padStart(4)}  ${sum.toFixed(2).padStart(12)}`;
+        return `${a.padEnd(20).slice(0, 20)} ${String(n).padStart(4)} ${sum.toFixed(2).padStart(12)}`;
       })
       .join("\n");
 
-    const msg =
-      `🔀 *Cruce de ${arg}* · ${coverage.have.length} cuentas · ${all.length} movimientos\n\n` +
-      `\`\`\`\n${totals}\n\`\`\`\n` +
-      `*Traspasos pareados entre cuentas: ${result.pairs.length}*\n` +
-      `\`\`\`\n${formatCrossing(result)}\n\`\`\`\n` +
-      (orphans.length
-        ? `⚠️ *${orphans.length} pata(s) de traspaso sin contraparte*\n` +
-          `\`\`\`\n${orphans.map((o) => `${o.row.date.slice(0, 10)} ${(o.cents / 100).toFixed(2)} ${o.account}`).join("\n")}\n\`\`\`\n` +
-          `_Revísalas antes de escribir: puede faltar un estado, o el otro lado ya estar en Wallet._`
-        : `✅ Ninguna pata de traspaso quedó suelta.`);
+    const parts = [
+      `🔀 *Cruce de ${arg}*`,
+      `${coverage.have.length}/${coverage.have.length + coverage.missing.length} estados · ` +
+        `${fromStatements.length} mov. de estados · ${fromWallet.length} ya en Wallet`,
+      "",
+      "```",
+      totals,
+      "```",
+      `*Traspasos pareados: ${result.pairs.length}*`,
+      "```",
+      formatCrossing(result.pairs),
+      "```",
+    ];
 
-    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, msg);
+    if (already.length) {
+      parts.push(`✅ *${already.length}* de esos cruzan contra algo ya registrado — no hay que escribirlos.`, "");
+    }
+    if (result.possible.length) {
+      parts.push(
+        `🤔 *${result.possible.length} coincidencia(s) de monto* sin categoría de traspaso — puede ser casualidad:`,
+        "```", formatCrossing(result.possible), "```"
+      );
+    }
+    if (orphans.length) {
+      parts.push(
+        `⚠️ *${orphans.length} pata(s) sin contraparte*`,
+        "```",
+        orphans.map((o) => `${o.date} ${(o.cents / 100).toFixed(2)} ${o.account}`).join("\n"),
+        "```"
+      );
+    }
+    if (!coverage.complete) {
+      // The panorama is worth seeing while it fills in; committing to it is
+      // not, because a counterpart may still be in a statement that has not
+      // arrived. Saying which accounts are missing is what keeps the two apart.
+      parts.push(
+        "",
+        `_${formatCoverage(coverage)}_`,
+        `_Vista parcial: una pata suelta aquí puede tener su contraparte en un estado que falta._`
+      );
+    } else {
+      parts.push("", `_${formatCoverage(coverage)}_`);
+    }
+
+    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, parts.join("\n"));
   });
 
   bot.command("statements", async (ctx) => {

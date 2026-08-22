@@ -13,15 +13,23 @@
  * view in which "this movement already exists somewhere" can be answered.
  */
 
-import type { CsvRow } from "../csv.js";
+import type { CsvRow, } from "../csv.js";
+import type { WalletRecord } from "../types.js";
+
+/** Where a row came from — a statement being staged, or Wallet as it stands. */
+export type RowSource = "statement" | "wallet";
 
 export interface LedgerRow {
   account: string;
-  row: CsvRow;
+  source: RowSource;
   /** Signed cents: negative leaves the account, positive arrives. */
   cents: number;
   /** Epoch ms of the movement date. */
   time: number;
+  /** YYYY-MM-DD, for display. */
+  date: string;
+  category: string;
+  payee: string;
 }
 
 export interface TransferPair {
@@ -32,9 +40,21 @@ export interface TransferPair {
 }
 
 export interface CrossResult {
+  /** At least one leg is categorised as a transfer — these are real. */
   pairs: TransferPair[];
+  /**
+   * Neither leg claims to be a transfer; they only happen to be the same size a
+   * few days apart. Reported separately because a purchase of $50 in one
+   * account and unrelated income of $50 in another is a coincidence, and
+   * treating it as a transfer would merge two unrelated movements.
+   */
+  possible: TransferPair[];
   /** Rows left over: genuine one-sided movements, or a leg whose other half never arrived. */
   unpaired: LedgerRow[];
+}
+
+function isTransferRow(r: LedgerRow): boolean {
+  return /transfer|traspaso/i.test(r.category);
 }
 
 /** Banks post the two sides on different days; beyond this it stops being one movement. */
@@ -43,9 +63,35 @@ export const DEFAULT_GAP_DAYS = 4;
 export function toLedgerRows(account: string, rows: CsvRow[]): LedgerRow[] {
   return rows.map((row) => ({
     account,
-    row,
+    source: "statement" as const,
     cents: Math.round(parseFloat(row.amount) * 100),
     time: Date.parse(row.date.replace(" ", "T")),
+    date: row.date.slice(0, 10),
+    category: row.category ?? "",
+    payee: row.payee ?? "",
+  })).filter((r) => Number.isFinite(r.cents) && Number.isFinite(r.time));
+}
+
+/**
+ * What Wallet already holds for the month, in the same shape.
+ *
+ * Without these the crossing can only see the statements that arrived, so a
+ * payment already recorded reads as a missing movement and gets proposed again.
+ * Wallet stores amounts unsigned with a type flag: 1 is money in.
+ */
+export function toWalletRows(
+  records: WalletRecord[],
+  accountNamesById: Record<string, string>,
+  transferCategoryId?: string
+): LedgerRow[] {
+  return records.map((r) => ({
+    account: accountNamesById[r.accountId] ?? r.accountId,
+    source: "wallet" as const,
+    cents: r.type === 1 ? r.amount : -r.amount,
+    time: Date.parse(r.recordDate),
+    date: r.recordDate.slice(0, 10),
+    category: r.transfer || (transferCategoryId && r.categoryId === transferCategoryId) ? "Transfer, withdraw" : "",
+    payee: r.payee ?? r.note ?? "",
   })).filter((r) => Number.isFinite(r.cents) && Number.isFinite(r.time));
 }
 
@@ -64,6 +110,7 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
   const ins = rows.filter((r) => r.cents > 0).sort((a, b) => a.time - b.time);
   const used = new Set<LedgerRow>();
   const pairs: TransferPair[] = [];
+  const possible: TransferPair[] = [];
 
   for (const out of outs) {
     let best: LedgerRow | undefined;
@@ -79,25 +126,39 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
     if (best) {
       used.add(best);
       used.add(out);
-      pairs.push({ out, in: best, gapDays: Math.round(bestGap / 86_400_000) });
+      const pair = { out, in: best, gapDays: Math.round(bestGap / 86_400_000) };
+      (isTransferRow(out) || isTransferRow(best) ? pairs : possible).push(pair);
     }
   }
 
-  return { pairs, unpaired: rows.filter((r) => !used.has(r)) };
+  return { pairs, possible, unpaired: rows.filter((r) => !used.has(r)) };
 }
 
-/** Rows that claim to be a transfer but found no counterpart — the ones worth naming. */
+/** Statement rows that claim to be a transfer but found no counterpart. */
 export function orphanTransferLegs(result: CrossResult): LedgerRow[] {
-  return result.unpaired.filter((r) => /transfer/i.test(r.row.category ?? ""));
+  return result.unpaired.filter((r) => r.source === "statement" && isTransferRow(r));
 }
 
-export function formatCrossing(result: CrossResult): string {
-  if (result.pairs.length === 0) return "Sin traspasos pareados entre cuentas.";
-  const lines = result.pairs.map((p) => {
-    const amount = (Math.abs(p.out.cents) / 100).toFixed(2);
-    const when = p.out.row.date.slice(0, 10);
-    const gap = p.gapDays > 0 ? ` (${p.gapDays}d)` : "";
-    return `${when} $${amount}  ${p.out.account} → ${p.in.account}${gap}`;
-  });
-  return lines.join("\n");
+/**
+ * Statement rows already accounted for by something in Wallet — the answer to
+ * "would writing this duplicate it".
+ */
+export function alreadyInWallet(result: CrossResult): TransferPair[] {
+  return [...result.pairs, ...result.possible].filter(
+    (p) => p.out.source !== p.in.source
+  );
+}
+
+const mark = (p: TransferPair): string =>
+  p.out.source === p.in.source ? "" : "  ·ya en Wallet";
+
+export function formatCrossing(pairs: TransferPair[]): string {
+  if (pairs.length === 0) return "Sin traspasos pareados entre cuentas.";
+  return pairs
+    .map((p) => {
+      const amount = (Math.abs(p.out.cents) / 100).toFixed(2);
+      const gap = p.gapDays > 0 ? ` (${p.gapDays}d)` : "";
+      return `${p.out.date} $${amount}  ${p.out.account} → ${p.in.account}${gap}${mark(p)}`;
+    })
+    .join("\n");
 }

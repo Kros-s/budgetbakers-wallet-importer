@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows,
+  alreadyInWallet, crossTransfers, formatCrossing, orphanTransferLegs, toLedgerRows, toWalletRows,
 } from "../../statements/crossing.js";
 import type { CsvRow } from "../../csv.js";
 
@@ -23,12 +23,13 @@ test("the two legs of a card payment meet across two statements", () => {
   assert.equal(out.pairs[0].out.account, "Bancomer");
   assert.equal(out.pairs[0].in.account, "Meli");
   assert.deepEqual(out.unpaired, []);
+  assert.deepEqual(out.possible, []);
 });
 
 test("legs posted a few days apart still pair", () => {
   const all = [
-    ...rows("Meli", r("2026-07-03", "3268.48")),
-    ...rows("Bancomer", r("2026-07-01", "-3268.48")),
+    ...rows("Meli", r("2026-07-03", "3268.48", "Transfer, withdraw")),
+    ...rows("Bancomer", r("2026-07-01", "-3268.48", "Transfer, withdraw")),
   ];
   const out = crossTransfers(all);
   assert.equal(out.pairs.length, 1);
@@ -48,14 +49,59 @@ test("two movements of equal size in the same account are never a transfer", () 
   // unrelated movements that happen to be the same size.
   const all = rows("Bancomer", r("2026-07-01", "-500"), r("2026-07-01", "500"));
   assert.equal(crossTransfers(all).pairs.length, 0);
+  assert.equal(crossTransfers(all).possible.length, 0);
   assert.equal(crossTransfers(all).unpaired.length, 2);
+});
+
+test("an amount coincidence is reported apart from a real transfer", () => {
+  // A $50 purchase in one account and unrelated $50 income in another, days
+  // apart, is a coincidence. Calling it a transfer merges two unrelated
+  // movements; hiding it loses a possible match. So it goes in its own bucket.
+  const coincidence = [
+    ...rows("Costco", r("2026-07-01", "-50", "Others")),
+    ...rows("Klar", r("2026-07-02", "50", "Others")),
+  ];
+  const out = crossTransfers(coincidence);
+  assert.equal(out.pairs.length, 0);
+  assert.equal(out.possible.length, 1);
+
+  const real = [
+    ...rows("Costco", r("2026-07-01", "-50", "Transfer, withdraw")),
+    ...rows("Klar", r("2026-07-02", "50", "Others")),
+  ];
+  assert.equal(crossTransfers(real).pairs.length, 1);
+  assert.equal(crossTransfers(real).possible.length, 0);
+});
+
+test("a statement row pairs against what Wallet already holds", () => {
+  // The point of feeding Wallet into the crossing: a payment already recorded
+  // must read as "already there", not as a movement to add.
+  const wallet = toWalletRows(
+    [{ accountId: "acc-bancomer", amount: 326848, type: 0, recordDate: "2026-07-01T12:00:00.000Z", transfer: true } as never],
+    { "acc-bancomer": "Bancomer" }
+  );
+  const all = [...rows("Meli", r("2026-07-01", "3268.48", "Transfer, withdraw")), ...wallet];
+  const out = crossTransfers(all);
+  assert.equal(out.pairs.length, 1);
+  const already = alreadyInWallet(out);
+  assert.equal(already.length, 1, "la pareja cruza estado con Wallet");
+  assert.equal(out.unpaired.length, 0);
+});
+
+test("a leftover Wallet row is not called an orphan statement leg", () => {
+  const wallet = toWalletRows(
+    [{ accountId: "a", amount: 5000, type: 0, recordDate: "2026-07-01T12:00:00.000Z", transfer: true } as never],
+    { a: "Bancomer" }
+  );
+  assert.deepEqual(orphanTransferLegs(crossTransfers(wallet)), []);
 });
 
 test("each row is consumed once, so repeated amounts do not cross-match", () => {
   // Three $500 movements a month would otherwise produce six bogus pairs.
+  const T = "Transfer, withdraw";
   const all = [
-    ...rows("Bancomer", r("2026-07-01", "-500"), r("2026-07-02", "-500"), r("2026-07-03", "-500")),
-    ...rows("Klar", r("2026-07-01", "500"), r("2026-07-02", "500"), r("2026-07-03", "500")),
+    ...rows("Bancomer", r("2026-07-01", "-500", T), r("2026-07-02", "-500", T), r("2026-07-03", "-500", T)),
+    ...rows("Klar", r("2026-07-01", "500", T), r("2026-07-02", "500", T), r("2026-07-03", "500", T)),
   ];
   const out = crossTransfers(all);
   assert.equal(out.pairs.length, 3);
@@ -88,6 +134,6 @@ test("the crossing reads as direction and amount", () => {
     ...rows("Meli", r("2026-07-01", "3268.48")),
     ...rows("Bancomer", r("2026-07-01", "-3268.48")),
   ];
-  assert.match(formatCrossing(crossTransfers(all)), /2026-07-01 \$3268\.48\s+Bancomer → Meli/);
-  assert.match(formatCrossing({ pairs: [], unpaired: [] }), /Sin traspasos pareados/);
+  assert.match(formatCrossing(crossTransfers(all).possible), /2026-07-01 \$3268\.48\s+Bancomer → Meli/);
+  assert.match(formatCrossing([]), /Sin traspasos pareados/);
 });
