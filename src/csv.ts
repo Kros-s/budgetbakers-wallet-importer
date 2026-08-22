@@ -68,6 +68,20 @@ export interface CsvRow {
    * apart: "MERPAGO*SAMSUNG 03/03" was operated 09-ene and charged 10-feb.
    */
   opdate?: string;
+  /**
+   * Instalment marker as the statement prints it, "4/6" — Banamex writes
+   * "004 de 006" on the movement line, Banorte "03/03" after the description.
+   *
+   * Taken from the statement's own column, never guessed from the description:
+   * a payee ending in "12/25" is a date far more often than an instalment.
+   */
+  meses?: string;
+  /**
+   * The full price of a deferred purchase, from the statement's deferred
+   * section ("Original"), present on the first instalment only. A $32,880
+   * purchase in six shows $5,480 on the movement line and the full figure here.
+   */
+  montooriginal?: string;
 }
 
 /** A row that could not be converted, with a reason. */

@@ -38,6 +38,7 @@ import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../statements/period.js";
 import { chargesMismatch, parseDeclaredCharges } from "../statements/extraction.js";
+import { describeIgnored, splitForWriting } from "../statements/installments.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -98,8 +99,8 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `TAMBIÉN van. NO recortes al mes ${args.month} — ese es solo la etiqueta del estado.\n\n` +
     `Emite un único bloque CSV:\n\n` +
     `<<<CSV>>>\n` +
-    `date,account,amount,category,note,payee,opdate\n` +
-    `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ,2026-07-04\n` +
+    `date,account,amount,category,note,payee,opdate,meses,montooriginal\n` +
+    `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ,2026-07-04,,\n` +
     `<<<END>>>\n\n` +
     `Reglas:\n` +
     `- account SIEMPRE "${args.account}" (todas las filas).\n` +
@@ -111,7 +112,14 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- payee: el nombre del comercio tal como aparece.\n` +
     `- Asigna la categoría más razonable del catálogo. Pagos RECIBIDOS a la tarjeta (abonos "SU PAGO", "PAGO RECIBIDO") usa "Transfer, withdraw".\n` +
     `- NO incluyas: intereses resumidos sin movimiento, saldos, totales, ni líneas informativas.\n` +
-    `- Incluye comisiones y cargos del banco como movimientos ("Charges, Fees").\n\n` +
+    `- Incluye comisiones y cargos del banco como movimientos ("Charges, Fees").\n` +
+    `- COMPRAS A MESES: si el estado marca la parcialidad (Banamex escribe "004 de 006" en la línea del ` +
+    `movimiento; Banorte "03/03" tras la descripción), copia ese marcador en la columna \`meses\` como ` +
+    `"4/6". El \`amount\` sigue siendo lo cargado ESTE periodo, para que la suma cuadre.\n` +
+    `- Si además es la PRIMERA parcialidad, busca el precio total de la compra en la sección de compras ` +
+    `diferidas (columna "Original") y ponlo en \`montooriginal\`. Si no aparece, déjala vacía.\n` +
+    `- No deduzcas la parcialidad de la descripción: un comercio que termina en "12/25" casi siempre es ` +
+    `una fecha. Solo copia lo que el estado publique en su propia columna.\n\n` +
     `${CATALOG_PROMPT}\n\n` +
     `Al final, después del bloque CSV, agrega DOS líneas:\n` +
     `- "TOTAL_MOVIMIENTOS: <n>" con el número de filas.\n` +
@@ -233,8 +241,22 @@ async function reconcile(
   console.log(`👀 Solo en Wallet (no aparecen en el estado): ${d.walletOnly.length}`);
   for (const w of d.walletOnly) console.log(`   ${w.recordDate.slice(0, 10)} $${(w.amount / 100) * (w.type === 1 ? -1 : 1)} ${w.payee ?? w.note ?? ""}`);
 
+  // A purchase in instalments is recorded once, for its full price, in the
+  // month it was bought; the monthly instalments are ignored. They were still
+  // extracted and still counted toward the arithmetic above — dropping them
+  // earlier would make the extraction stop adding up against the statement's
+  // own totals and trip the check that guards the write.
+  const { writable, ignored } = splitForWriting(d.missing);
+  if (ignored.length > 0) {
+    console.log(`🔁 ${ignored.length} parcialidad(es) de compras a meses, ignoradas a propósito:`);
+    console.log(describeIgnored(ignored).split("\n").map((l) => `   ${l}`).join("\n"));
+  }
+  for (const r of writable.filter((x) => x.montooriginal && x.meses)) {
+    console.log(`🧾 Compra a meses ${r.meses} — se registra completa por $${r.amount}, no la parcialidad.`);
+  }
+
   if (!args.write) {
-    console.log(`\nDry — nada escrito en Wallet. Repite con --write para agregar los ${d.missing.length} faltantes.`);
+    console.log(`\nDry — nada escrito en Wallet. Repite con --write para agregar los ${writable.length} faltantes.`);
     return;
   }
 
@@ -247,8 +269,8 @@ async function reconcile(
 
   // ── Write missing (unambiguous only) ──
   let skippedRows = 0;
-  if (d.missing.length > 0) {
-    const { records, skipped } = convertRows(d.missing, lookup);
+  if (writable.length > 0) {
+    const { records, skipped } = convertRows(writable, lookup);
     skippedRows = skipped.length;
     if (skipped.length > 0) {
       console.warn(`⚠️ ${skipped.length} fila(s) no convirtieron y NO se escriben: ${skipped.map((s) => s.reason).join("; ")}`);
