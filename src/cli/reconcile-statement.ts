@@ -46,6 +46,8 @@ interface Args {
   account: string;
   month: string; // YYYY-MM
   write: boolean;
+  /** Reuse the stored extraction instead of running a new one. */
+  fromLedger: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -57,10 +59,16 @@ function parseArgs(argv: string[]): Args {
   const account = get("--account");
   const month = get("--month");
   if (!pdf || !account || !month || !/^\d{4}-\d{2}$/.test(month)) {
-    throw new Error("Uso: reconcile-statement.ts <pdf> --account <nombre> --month YYYY-MM [--write]");
+    throw new Error(
+      "Uso: reconcile-statement.ts <pdf> --account <nombre> --month YYYY-MM [--write] [--from-ledger]"
+    );
   }
   if (!fs.existsSync(pdf)) throw new Error(`No existe el PDF: ${pdf}`);
-  return { pdf, account, month, write: argv.includes("--write") };
+  return {
+    pdf, account, month,
+    write: argv.includes("--write"),
+    fromLedger: argv.includes("--from-ledger"),
+  };
 }
 
 function profileSlug(account: string): string {
@@ -152,64 +160,31 @@ function diff(rows: CsvRow[], existing: WalletRecord[], accountId: string): Diff
   return { missing, matched, ambiguous, walletOnly };
 }
 
-async function main() {
-  loadEnvLocal();
-  const args = parseArgs(process.argv.slice(2));
-  const config = loadBotConfig();
-  const credentials = loadDirectCredentials();
-  const couch = buildCouchClient(credentials.replication);
-  const lookupData = await fetchLookupData(couch);
-  const lookup = buildLookupMapsFromData(lookupData);
+/**
+ * Everything after the rows exist: compare against Wallet, report, and — only
+ * with --write — commit. Shared by the fresh-extraction path and the replay of
+ * a stored ledger so an approved run cannot diverge from what was shown.
+ */
+interface ReconcileCtx {
+  config: ReturnType<typeof loadBotConfig>;
+  couch: ReturnType<typeof buildCouchClient>;
+  lookup: ReturnType<typeof buildLookupMapsFromData>;
+  userId: string;
+  accountId: string;
+}
 
-  const accountId = lookup.accounts[args.account];
-  if (!accountId) throw new Error(`Cuenta desconocida: "${args.account}"`);
-
-  console.log(`\n── reconcile-statement ── ${args.account} · ${args.month} · ${args.write ? "WRITE" : "dry"} · model=${STATEMENT_MODEL}\n`);
-
-  // ── Extract (fresh isolated Sonnet session; Read tool only) ──
-  const profile = loadProfile(args.account);
-  const result = await runClaude({
-    config,
-    sessionId: uuidv4(),
-    isFirstTurn: true,
-    prompt: buildExtractionPrompt(args, profile),
-    allowedTools: ["Read"],
-    timeoutMs: 600_000,
-    model: STATEMENT_MODEL,
-  });
-  if (!result.ok) throw new Error(`Claude error: ${result.text.slice(0, 300)}`);
-  if (result.text.includes("PDF_UNREADABLE")) {
-    throw new Error("Claude no pudo leer el PDF (¿protegido con contraseña? desprotégelo primero, p.ej. qpdf --decrypt).");
-  }
-  const { csv } = extractCsvBlock(result.text);
-  if (!csv) throw new Error(`Sin bloque CSV en la respuesta:\n${result.text.slice(0, 400)}`);
-  const rows = parseCsv(csv);
-  const claimed = /TOTAL_MOVIMIENTOS:\s*(\d+)/.exec(result.text)?.[1];
-  console.log(`Extraídos ${rows.length} movimiento(s)${claimed ? ` (Claude declara ${claimed})` : ""}.`);
-  if (claimed && Number(claimed) !== rows.length) {
-    console.warn(`⚠️ El conteo declarado (${claimed}) no coincide con las filas (${rows.length}) — revisar extracción.`);
-  }
-
-  // The row count is self-reported and stays consistent when a movement is
-  // dropped. The statement's own totals are the only figure the extractor
-  // cannot satisfy by being self-consistent.
-  const chargeWarn = chargesMismatch(rows, parseDeclaredCharges(result.text));
+async function reconcile(
+  args: Args,
+  ctx: ReconcileCtx,
+  rows: CsvRow[],
+  declared: { from: string; to: string } | null,
+  chargeWarn: string | null
+): Promise<void> {
+  const { config, couch, lookup, accountId } = ctx;
   if (chargeWarn) {
     console.warn(`⚠️ Cuadre contra el estado: ${chargeWarn}.`);
     console.warn(`   NO uses --write hasta resolverlo: escribiría un mes incompleto.`);
   }
-
-  const declared = parsePeriodLine(result.text);
-
-  // ── Persist normalized statement ledger ──
-  const ledgerPath = path.resolve(`data/statements/ledger-${profileSlug(args.account)}-${args.month}.json`);
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  fs.writeFileSync(ledgerPath, JSON.stringify({
-    account: args.account, month: args.month, extractedAt: new Date().toISOString(),
-    period: declared,
-    sourcePdf: path.basename(args.pdf), rows,
-  }, null, 2));
-  console.log(`Ledger del estado: ${ledgerPath}`);
 
   // ── Diff vs Wallet ──
   // The window follows the statement's own period. Using the calendar month
@@ -263,7 +238,7 @@ async function main() {
       console.warn(`⚠️ ${skipped.length} fila(s) no convirtieron y NO se escriben: ${skipped.map((s) => s.reason).join("; ")}`);
     }
     if (records.length > 0) {
-      await writeRecords(couch, credentials.userId, records);
+      await writeRecords(couch, ctx.userId, records);
       console.log(`\n✍️ Escritos ${records.length} registro(s) con nota [Claude reconcile ${args.month}].`);
     }
   }
@@ -287,6 +262,83 @@ async function main() {
     (d.missing.length ? `\n\`\`\`\n${rowsToCsv(d.missing).slice(0, 1500)}\n\`\`\`` : "");
   await sendSafeMessage(bot.telegram, chatId, msg);
   console.log("Resumen enviado a Telegram.");
+}
+
+async function main() {
+  loadEnvLocal();
+  const args = parseArgs(process.argv.slice(2));
+  const config = loadBotConfig();
+  const credentials = loadDirectCredentials();
+  const couch = buildCouchClient(credentials.replication);
+  const lookup = buildLookupMapsFromData(await fetchLookupData(couch));
+
+  const accountId = lookup.accounts[args.account];
+  if (!accountId) throw new Error(`Cuenta desconocida: "${args.account}"`);
+  const ctx: ReconcileCtx = { config, couch, lookup, userId: credentials.userId, accountId };
+
+  console.log(`\n── reconcile-statement ── ${args.account} · ${args.month} · ${args.write ? "WRITE" : "dry"} · model=${STATEMENT_MODEL}\n`);
+
+  const ledgerPath = path.resolve(`data/statements/ledger-${profileSlug(args.account)}-${args.month}.json`);
+
+  // ── Reuse a stored extraction ──
+  // The approve-then-write flow runs this twice, and a second extraction is not
+  // guaranteed to produce the first one's rows. What the user approved is what
+  // must be written, so the write pass replays the ledger instead of re-reading
+  // the PDF — cheaper, and it removes a whole class of "that is not what I saw".
+  if (args.fromLedger) {
+    if (!fs.existsSync(ledgerPath)) {
+      throw new Error(`No hay extracción guardada en ${ledgerPath}. Corre primero sin --from-ledger.`);
+    }
+    const stored = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as {
+      rows: CsvRow[]; period: { from: string; to: string } | null; chargesDeclared?: number | null;
+    };
+    console.log(`Reutilizando la extracción guardada: ${stored.rows.length} movimiento(s) de ${ledgerPath}`);
+    await reconcile(args, ctx, stored.rows, stored.period, chargesMismatch(stored.rows, stored.chargesDeclared ?? null));
+    return;
+  }
+
+  // ── Extract (fresh isolated Sonnet session; Read tool only) ──
+  const profile = loadProfile(args.account);
+  const result = await runClaude({
+    config,
+    sessionId: uuidv4(),
+    isFirstTurn: true,
+    prompt: buildExtractionPrompt(args, profile),
+    allowedTools: ["Read"],
+    timeoutMs: 600_000,
+    model: STATEMENT_MODEL,
+  });
+  if (!result.ok) throw new Error(`Claude error: ${result.text.slice(0, 300)}`);
+  if (result.text.includes("PDF_UNREADABLE")) {
+    throw new Error("Claude no pudo leer el PDF (¿protegido con contraseña? desprotégelo primero, p.ej. qpdf --decrypt).");
+  }
+  const { csv } = extractCsvBlock(result.text);
+  if (!csv) throw new Error(`Sin bloque CSV en la respuesta:\n${result.text.slice(0, 400)}`);
+  const rows = parseCsv(csv);
+  const claimed = /TOTAL_MOVIMIENTOS:\s*(\d+)/.exec(result.text)?.[1];
+  console.log(`Extraídos ${rows.length} movimiento(s)${claimed ? ` (Claude declara ${claimed})` : ""}.`);
+  if (claimed && Number(claimed) !== rows.length) {
+    console.warn(`⚠️ El conteo declarado (${claimed}) no coincide con las filas (${rows.length}) — revisar extracción.`);
+  }
+
+  // The row count is self-reported and stays consistent when a movement is
+  // dropped. The statement's own totals are the only figure the extractor
+  // cannot satisfy by being self-consistent.
+  const chargeWarn = chargesMismatch(rows, parseDeclaredCharges(result.text));
+  const declared = parsePeriodLine(result.text);
+
+  // ── Persist normalized statement ledger ──
+  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+  fs.writeFileSync(ledgerPath, JSON.stringify({
+    account: args.account, month: args.month, extractedAt: new Date().toISOString(),
+    period: declared,
+    chargesDeclared: parseDeclaredCharges(result.text),
+    sourcePdf: path.basename(args.pdf), rows,
+  }, null, 2));
+  console.log(`Ledger del estado: ${ledgerPath}`);
+
+  await reconcile(args, ctx, rows, declared, chargeWarn);
+
 }
 
 main().catch((err) => {

@@ -15,6 +15,9 @@
  * itself — it only proposes the CSV. The bot is the sole writer.
  */
 
+import fs from "fs";
+import path from "path";
+import { v4 as uuidv4 } from "uuid";
 import type { Context, Telegraf } from "telegraf";
 import { Markup } from "telegraf";
 import { message } from "telegraf/filters";
@@ -61,6 +64,11 @@ import { formatVerdict, judge } from "../webhook/pending-audit.js";
 import { parseVerdict } from "../webhook/verdict.js";
 import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
 import { formatStatementsTable } from "./statements-view.js";
+import { DETECTION_PROMPT, looksLikeStatement, monthOf, parseDetection, resolveAccount } from "../statements/detect.js";
+import { INBOX_DIR } from "../statements/inbox.js";
+import {
+  formatReconcileSummary, needsAttention, parseReconcileOutput, reconcileCommand, runReconcile,
+} from "./statement-flow.js";
 import { statementStatus } from "../statements/registry.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
 import { activeQuestion, justExpired, startGuided, stopGuided, secondsLeft } from "./guided-mode.js";
@@ -806,6 +814,113 @@ export function registerHandlers(deps: HandlerDeps): void {
     await ctx.reply(msg);
   });
 
+  // ── Statement routing ───────────────────────────────────────────────────
+  // A dry run is proposed, never applied. The write pass replays the stored
+  // extraction rather than reading the PDF again, so what gets committed is
+  // exactly the diff that was shown.
+  const proposedStatements = new Map<number, { pdf: string; account: string; month: string }>();
+
+  async function tryStatementRoute(
+    d: HandlerDeps,
+    chatId: number,
+    localPath: string
+  ): Promise<boolean> {
+    const detection = await runClaude({
+      config: d.config,
+      sessionId: uuidv4(),
+      isFirstTurn: true,
+      prompt: `Lee el PDF en ${localPath} con Read (solo las primeras páginas bastan).\n\n${DETECTION_PROMPT}`,
+      allowedTools: ["Read"],
+      timeoutMs: 180_000,
+      model: process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5",
+    });
+    if (!detection.ok || !looksLikeStatement(detection.text)) return false;
+
+    const parsed = parseDetection(detection.text);
+    if (!parsed) return false;
+    const account = resolveAccount(parsed);
+    const month = monthOf(parsed);
+
+    if (!account) {
+      // Filing a statement against a guessed account writes a month of
+      // movements into an account that never saw them.
+      await sendSafeMessage(
+        d.bot.telegram, chatId,
+        `📄 Esto parece un estado de cuenta de *${parsed.issuer}* (${parsed.period.from} → ${parsed.period.to}), ` +
+          `pero no sé a qué cuenta de Wallet corresponde. Dime cuál y lo proceso.`
+      );
+      return true;
+    }
+
+    fs.mkdirSync(INBOX_DIR, { recursive: true });
+    const filed = path.join(INBOX_DIR, `${account.toLowerCase().replace(/\s+/g, "-")}-${month}.pdf`);
+    fs.copyFileSync(localPath, filed);
+
+    await sendSafeMessage(d.bot.telegram, chatId, `📄 *${account} · ${month}* — conciliando contra Wallet, tarda un poco…`);
+
+    const run = await runReconcile(reconcileCommand({ pdf: filed, account, month }));
+    if (!run.ok) {
+      await sendSafeMessage(
+        d.bot.telegram, chatId,
+        `❌ No pude conciliar *${account} · ${month}*:\n\`\`\`\n${(run.stderr || run.stdout).slice(-600)}\n\`\`\``
+      );
+      return true;
+    }
+
+    const summary = parseReconcileOutput(run.stdout);
+    const msg = formatReconcileSummary(account, month, summary);
+    const blocked = needsAttention(summary);
+
+    if (blocked || summary.missing === 0) {
+      await sendSafeMessage(
+        d.bot.telegram, chatId,
+        `${msg}\n\n${summary.missing === 0 ? "_Nada que agregar._" : "_No propongo escribir con esto sin resolver._"}`
+      );
+      return true;
+    }
+
+    proposedStatements.set(chatId, { pdf: filed, account, month });
+    await d.bot.telegram.sendMessage(chatId, msg, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[
+          { text: `✍️ Escribir ${summary.missing}`, callback_data: "confirm_statement" },
+          { text: "🗑️ Descartar", callback_data: "cancel_statement" },
+        ]],
+      },
+    });
+    return true;
+  }
+
+  bot.action("confirm_statement", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const proposed = proposedStatements.get(ctx.chat!.id);
+    if (!proposed) {
+      await ctx.reply("Esa conciliación ya no está vigente. Vuelve a mandar el PDF.");
+      return;
+    }
+    proposedStatements.delete(ctx.chat!.id);
+    await ctx.reply(`✍️ Escribiendo ${proposed.account} · ${proposed.month}…`);
+
+    const run = await runReconcile(
+      reconcileCommand({ ...proposed, write: true, fromLedger: true })
+    );
+    await sendSafeMessage(
+      deps.bot.telegram, ctx.chat!.id,
+      run.ok
+        ? `✅ *${proposed.account} · ${proposed.month}* escrito.\n\`\`\`\n${run.stdout.slice(-700)}\n\`\`\``
+        : `❌ Falló al escribir:\n\`\`\`\n${(run.stderr || run.stdout).slice(-600)}\n\`\`\``
+    );
+  });
+
+  bot.action("cancel_statement", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const had = proposedStatements.delete(ctx.chat!.id);
+    await ctx.reply(had ? "🗑️ Descartada, nada se escribió en Wallet." : "No había ninguna conciliación pendiente.");
+  });
+
   bot.action("cancel_ignore", async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
@@ -917,6 +1032,16 @@ export function registerHandlers(deps: HandlerDeps): void {
           EMAIL_SYSTEM_PROMPT, target.found.entry.shortId
         );
         return;
+      }
+
+      // A statement goes to the reconciler, not to the generic "read it and
+      // propose a CSV" path: only the reconciler knows the statement's period,
+      // the per-bank profile, and how to check the extraction against the
+      // totals the statement declares about itself.
+      const isPdf = (doc.mime_type ?? "").includes("pdf") || /\.pdf$/i.test(doc.file_name ?? "");
+      if (isPdf && !target) {
+        const routed = await tryStatementRoute(deps, ctx.chat.id, downloaded.localPath);
+        if (routed) return;
       }
 
       const prompt =

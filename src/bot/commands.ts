@@ -64,5 +64,7 @@ export const HELP_TEXT = [
   "",
   "*Estados de cuenta*",
   "`/statements` — la tabla por mes y cuenta: ✅ conciliado, ❌ falta, ⬜ todavía no vence.",
-  "Mándame el PDF como archivo y lo proceso. No hace falta comando.",
+  "Mándame el PDF como archivo y lo proceso. No hace falta comando: identifico el banco y el periodo, ",
+  "lo comparo contra Wallet y te muestro el diff. Nada se escribe hasta que le des al botón.",
+  "Si algo no cuadra contra los totales del propio estado, te lo digo y no te ofrezco escribir.",
 ].join("\n");
