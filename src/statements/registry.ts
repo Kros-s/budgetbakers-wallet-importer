@@ -17,6 +17,12 @@ export interface RegistryEntry {
   lastReceived: string | null;
   /** Days of grace after cutDay before nagging. Default 5. */
   graceDays?: number;
+  /**
+   * Oldest month worth chasing, "YYYY-MM". Without it an account that has never
+   * been reconciled would be chased back to the beginning of time, so the
+   * lookback is capped instead.
+   */
+  startMonth?: string;
 }
 
 export type Registry = Record<string, RegistryEntry>; // account name → entry
@@ -44,24 +50,81 @@ export function markReceived(account: string, month: string): void {
   saveRegistry(reg);
 }
 
-function prevMonth(d: Date): string {
-  const m = new Date(d.getFullYear(), d.getMonth() - 1, 1);
-  return `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}`;
+function monthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function addMonths(month: string, n: number): string {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return monthKey(d);
+}
+
+/** How far back to look when an account has never been reconciled. */
+const DEFAULT_LOOKBACK_MONTHS = 6;
+
+export interface MissingStatement {
+  account: string;
+  /** "YYYY-MM" */
+  month: string;
+  source: string;
 }
 
 /**
- * Accounts whose previous-month statement is overdue: today is past
- * cutDay + graceDays and lastReceived < previous month.
+ * The newest month whose statement is already due for this account: its cut day
+ * plus the grace period has passed.
  */
-export function missingStatements(today = new Date()): { account: string; month: string; source: string }[] {
+function lastDueMonth(entry: RegistryEntry, today: Date): string | null {
+  const grace = entry.graceDays ?? 5;
+  const cut = Math.min(entry.cutDay, 28);
+  // A month's statement is due once cutDay+grace of the FOLLOWING month passed.
+  const dueForPrev = new Date(today.getFullYear(), today.getMonth(), cut + grace);
+  const anchor = today >= dueForPrev
+    ? new Date(today.getFullYear(), today.getMonth() - 1, 1)
+    : new Date(today.getFullYear(), today.getMonth() - 2, 1);
+  return monthKey(anchor);
+}
+
+/**
+ * Every month still missing, not just the most recent one.
+ *
+ * It used to report only the previous month, so three months behind on an
+ * account produced one nag and the two older months were never mentioned again
+ * — the reconciliation silently narrowed to whatever was most recent.
+ */
+export function missingStatements(today = new Date()): MissingStatement[] {
   const reg = loadRegistry();
-  const expected = prevMonth(today);
-  const out: { account: string; month: string; source: string }[] = [];
+  const out: MissingStatement[] = [];
   for (const [account, e] of Object.entries(reg)) {
-    const due = new Date(today.getFullYear(), today.getMonth(), Math.min(e.cutDay, 28) + (e.graceDays ?? 5));
-    if (today < due) continue;
-    if (e.lastReceived && e.lastReceived >= expected) continue;
-    out.push({ account, month: expected, source: e.source });
+    const last = lastDueMonth(e, today);
+    if (!last) continue;
+    const from = e.lastReceived
+      ? addMonths(e.lastReceived, 1)
+      : e.startMonth ?? addMonths(monthKey(today), -DEFAULT_LOOKBACK_MONTHS);
+    for (let m = from; m <= last; m = addMonths(m, 1)) {
+      out.push({ account, month: m, source: e.source });
+    }
   }
   return out;
+}
+
+export interface AccountStatus {
+  account: string;
+  source: string;
+  cutDay: number;
+  lastReceived: string | null;
+  missing: string[];
+}
+
+/** Per-account view for the /statements listing. */
+export function statementStatus(today = new Date()): AccountStatus[] {
+  const reg = loadRegistry();
+  const missing = missingStatements(today);
+  return Object.entries(reg).map(([account, e]) => ({
+    account,
+    source: e.source,
+    cutDay: e.cutDay,
+    lastReceived: e.lastReceived,
+    missing: missing.filter((m) => m.account === account).map((m) => m.month),
+  }));
 }
