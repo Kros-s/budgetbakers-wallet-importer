@@ -158,3 +158,26 @@ test("a real transfer does consume both its legs", () => {
   ];
   assert.deepEqual(crossTransfers(all).unpaired, []);
 });
+
+test("a leg posted late still meets its counterpart via the operation date", () => {
+  // Banorte Crédito prints "Fecha de la operación" beside "Fecha de cargo".
+  // A payment operated on the 30th and posted on the 2nd sits in the next
+  // month's statement; without the operation date the two legs look like two
+  // different movements, and each gets written.
+  const late: CsvRow = { ...r("2026-08-02", "3268.48", "Transfer, withdraw"), opdate: "2026-07-30" };
+  const all = [
+    ...toLedgerRows("Meli", [late]),
+    ...rows("Bancomer", r("2026-07-30", "-3268.48", "Transfer, withdraw")),
+  ];
+  const out = crossTransfers(all);
+  assert.equal(out.pairs.length, 1, "parean por la fecha de operación");
+  assert.equal(out.pairs[0].gapDays, 0);
+});
+
+test("without the operation date the same pair falls outside the window", () => {
+  const all = [
+    ...rows("Meli", r("2026-08-06", "3268.48", "Transfer, withdraw")),
+    ...rows("Bancomer", r("2026-07-30", "-3268.48", "Transfer, withdraw")),
+  ];
+  assert.equal(crossTransfers(all).pairs.length, 0);
+});

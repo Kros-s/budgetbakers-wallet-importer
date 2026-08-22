@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  calendarPeriod, cutDayMismatch, parsePeriodLine, walletWindow,
+  calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../../statements/period.js";
 
 test("the period line is read from the extractor's answer", () => {
@@ -50,4 +50,20 @@ test("an end-of-month account is not flagged for closing on the 31st", () => {
 test("the wrong PDF filed against the wrong account is caught", () => {
   const warn = cutDayMismatch({ from: "2026-06-22", to: "2026-07-21" }, 8);
   assert.match(warn ?? "", /cierra el día 21.*corte 8/);
+});
+
+test("a movement at the edge of the period is expected, not an anomaly", () => {
+  // A purchase on the 30th charged on the 2nd belongs to one statement while
+  // Wallet holds it under the other date.
+  const p = { from: "2026-07-01", to: "2026-07-31" };
+  assert.equal(isNearBoundary("2026-07-30", p), true);
+  assert.equal(isNearBoundary("2026-07-02", p), true);
+  assert.equal(isNearBoundary("2026-07-15", p), false);
+});
+
+test("the boundary reaches just past the edge, where the neighbour's rows sit", () => {
+  const p = { from: "2026-07-01", to: "2026-07-31" };
+  assert.equal(isNearBoundary("2026-08-02", p), true);
+  assert.equal(isNearBoundary("2026-08-05", p), false);
+  assert.equal(isNearBoundary("no es fecha", p), false);
 });

@@ -45,6 +45,11 @@ import type { LookupMaps, NewRecord } from "./types.js";
 
 /** Raw row shape after csv-parse with `columns: true`. */
 export interface CsvRow {
+  /**
+   * When the money moved — the posting/charge date. This is the one Wallet is
+   * matched on, because it is also the date the bank's own totals are built
+   * from and the date an instalment actually hits.
+   */
   date: string;
   account: string;
   amount: string;
@@ -52,6 +57,17 @@ export interface CsvRow {
   note: string;
   payee: string;
   label?: string;
+  /**
+   * When the purchase happened, for statements that publish both columns
+   * (Banorte Crédito prints "Fecha de la operación" beside "Fecha de cargo").
+   *
+   * Usually a day before the charge, which the matcher's slack already covers.
+   * It matters at the edges of the month — a purchase on the 30th charged on
+   * the 2nd belongs to one statement and is recorded in Wallet under the other
+   * date — and it matters for instalments, where the two are a month or more
+   * apart: "MERPAGO*SAMSUNG 03/03" was operated 09-ene and charged 10-feb.
+   */
+  opdate?: string;
 }
 
 /** A row that could not be converted, with a reason. */

@@ -72,3 +72,24 @@ export function cutDayMismatch(period: StatementPeriod, cutDay: number, toleranc
   if (Math.abs(closingDay - cutDay) <= toleranceDays) return null;
   return `el estado cierra el día ${closingDay} y el registro dice corte ${cutDay} — ¿es el PDF de esta cuenta?`;
 }
+
+/** Days either side of the period edge where a movement may land in the neighbouring statement. */
+export const BOUNDARY_DAYS = 3;
+
+/**
+ * Is this date close enough to an edge of the period that the movement could
+ * legitimately appear on the neighbouring month's statement?
+ *
+ * Banks post a purchase a day or two after it happens, so one made on the 30th
+ * and charged on the 2nd sits on one statement while Wallet holds it under the
+ * other date. Rows at the edge are expected to settle next month, not evidence
+ * that something is wrong — telling the two apart is the point.
+ */
+export function isNearBoundary(day: string, period: StatementPeriod, slack = BOUNDARY_DAYS): boolean {
+  const t = Date.parse(`${day}T12:00:00`);
+  if (!Number.isFinite(t)) return false;
+  const edge = slack * 86_400_000;
+  const from = Date.parse(`${period.from}T12:00:00`);
+  const to = Date.parse(`${period.to}T12:00:00`);
+  return Math.abs(t - from) <= edge || Math.abs(t - to) <= edge;
+}

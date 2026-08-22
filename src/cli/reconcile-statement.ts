@@ -34,7 +34,9 @@ import { CATALOG_PROMPT } from "../webhook/email-processor.js";
 import { markReceived } from "../statements/registry.js";
 import { retireStatement } from "../statements/inbox.js";
 import { loadRegistry } from "../statements/registry.js";
-import { calendarPeriod, cutDayMismatch, parsePeriodLine, walletWindow } from "../statements/period.js";
+import {
+  calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
+} from "../statements/period.js";
 import { chargesMismatch, parseDeclaredCharges } from "../statements/extraction.js";
 import type { WalletRecord } from "../types.js";
 
@@ -96,13 +98,15 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `TAMBIÉN van. NO recortes al mes ${args.month} — ese es solo la etiqueta del estado.\n\n` +
     `Emite un único bloque CSV:\n\n` +
     `<<<CSV>>>\n` +
-    `date,account,amount,category,note,payee\n` +
-    `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ\n` +
+    `date,account,amount,category,note,payee,opdate\n` +
+    `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ,2026-07-04\n` +
     `<<<END>>>\n\n` +
     `Reglas:\n` +
     `- account SIEMPRE "${args.account}" (todas las filas).\n` +
     `- amount: negativo = cargo/gasto, positivo = abono/ingreso. Punto decimal, sin separador de miles.\n` +
-    `- date: fecha del movimiento según el estado; si no hay hora usa 12:00:00.\n` +
+    `- date: la fecha en que el movimiento SE CARGÓ (fecha de cargo/aplicación); si no hay hora usa 12:00:00.\n` +
+    `- opdate: si el estado publica DOS fechas por movimiento (p.ej. "Fecha de la operación" junto a ` +
+    `"Fecha de cargo"), pon aquí la de la operación en YYYY-MM-DD. Si solo hay una fecha, déjala vacía.\n` +
     `- note SIEMPRE exactamente "[Claude reconcile ${args.month}]".\n` +
     `- payee: el nombre del comercio tal como aparece.\n` +
     `- Asigna la categoría más razonable del catálogo. Pagos RECIBIDOS a la tarjeta (abonos "SU PAGO", "PAGO RECIBIDO") usa "Transfer, withdraw".\n` +
@@ -135,11 +139,16 @@ function diff(rows: CsvRow[], existing: WalletRecord[], accountId: string): Diff
   for (const row of rows) {
     const amt = Math.round(Math.abs(parseFloat(row.amount)) * 100);
     const type = parseFloat(row.amount) < 0 ? 1 : 0;
-    const rowTime = Date.parse(row.date.replace(" ", "T"));
+    // Either date may be the one Wallet holds: an alert fires when the purchase
+    // happens, the statement books it when it posts, and for an instalment the
+    // two are a month apart. Matching on the closest of the two is what keeps a
+    // movement from reading as missing and being written a second time.
+    const times = [Date.parse(row.date.replace(" ", "T"))];
+    if (row.opdate) times.push(Date.parse(`${row.opdate}T12:00:00`));
     const candidates = inAccount.filter((r) => {
       if (r.amount !== amt || r.type !== type) return false;
-      const dt = Math.abs(Date.parse(r.recordDate) - rowTime);
-      return dt <= DATE_SLACK_DAYS * 86_400_000;
+      const rec = Date.parse(r.recordDate);
+      return times.some((t) => Number.isFinite(t) && Math.abs(rec - t) <= DATE_SLACK_DAYS * 86_400_000);
     });
     const free = candidates.filter((c) => !usedRecordIds.has(c._id!));
     if (free.length === 1) {
@@ -214,6 +223,13 @@ async function reconcile(
   for (const r of d.missing) console.log(`   ${r.date.slice(0, 10)} $${r.amount} ${r.payee || ""} (${r.category})`);
   console.log(`⚠️ Ambiguos (revisar a mano): ${d.ambiguous.length}`);
   for (const a of d.ambiguous) console.log(`   ${a.row.date.slice(0, 10)} $${a.row.amount} ${a.row.payee || ""} — ${a.reason}`);
+  const edge = d.missing.filter((r) => isNearBoundary(r.date.slice(0, 10), period));
+  if (edge.length) {
+    console.log(
+      `📅 ${edge.length} de los faltantes caen al filo del periodo — puede que el banco los refleje ` +
+        `en el estado del mes vecino. No son anomalía; se resuelven al cruzar el mes.`
+    );
+  }
   console.log(`👀 Solo en Wallet (no aparecen en el estado): ${d.walletOnly.length}`);
   for (const w of d.walletOnly) console.log(`   ${w.recordDate.slice(0, 10)} $${(w.amount / 100) * (w.type === 1 ? -1 : 1)} ${w.payee ?? w.note ?? ""}`);
 

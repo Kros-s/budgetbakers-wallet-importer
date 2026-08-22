@@ -24,8 +24,13 @@ export interface LedgerRow {
   source: RowSource;
   /** Signed cents: negative leaves the account, positive arrives. */
   cents: number;
-  /** Epoch ms of the movement date. */
+  /** Epoch ms of the movement date (when it posted). */
   time: number;
+  /**
+   * Epoch ms of the operation date, when the statement published both.
+   * Either may be the one the counterpart is dated by.
+   */
+  opTime?: number;
   /** YYYY-MM-DD, for display. */
   date: string;
   category: string;
@@ -70,6 +75,7 @@ export function toLedgerRows(account: string, rows: CsvRow[]): LedgerRow[] {
     source: "statement" as const,
     cents: Math.round(parseFloat(row.amount) * 100),
     time: Date.parse(row.date.replace(" ", "T")),
+    opTime: row.opdate ? Date.parse(`${row.opdate}T12:00:00`) : undefined,
     date: row.date.slice(0, 10),
     category: row.category ?? "",
     payee: row.payee ?? "",
@@ -108,6 +114,14 @@ export function toWalletRows(
  * pairs are refused outright: a transfer has two accounts by definition, and
  * accepting one would silently merge two unrelated movements of equal size.
  */
+function closestGap(a: LedgerRow, b: LedgerRow): number {
+  const at = [a.time, ...(a.opTime !== undefined ? [a.opTime] : [])];
+  const bt = [b.time, ...(b.opTime !== undefined ? [b.opTime] : [])];
+  let best = Infinity;
+  for (const x of at) for (const y of bt) best = Math.min(best, Math.abs(x - y));
+  return best;
+}
+
 export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): CrossResult {
   const window = gapDays * 86_400_000;
   const outs = rows.filter((r) => r.cents < 0).sort((a, b) => a.time - b.time);
@@ -124,7 +138,10 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
       if (used.has(cand)) continue;
       if (cand.account === out.account) continue;
       if (cand.cents !== -out.cents) continue;
-      const gap = Math.abs(cand.time - out.time);
+      // Closest across every date either side published. A bank that posts a
+      // purchase two days later would otherwise leave the two legs looking
+      // like different movements.
+      const gap = closestGap(out, cand);
       if (gap > window) continue;
       if (gap < bestGap) { best = cand; bestGap = gap; }
     }
