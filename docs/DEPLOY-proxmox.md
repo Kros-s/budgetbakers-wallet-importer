@@ -7,6 +7,8 @@ como alternativa, no es la ruta activa.)
 
 ## Piezas (en `scripts/deploy/`)
 
+- `push.sh` — corre en el Mac: sincroniza el árbol, compila y reinicia el bot.
+  Es la única forma soportada de desplegar; los `--exclude` viven ahí.
 - `provision-lxc.sh` — corre EN el LXC: timezone, Node 22, pnpm, Claude CLI,
   build, usuario de servicio `bbw`, instala y habilita las unidades.
 - `systemd/bbw-daily.{service,timer}` — batch one-shot a las 20:00,
@@ -28,8 +30,10 @@ como alternativa, no es la ruta activa.)
    viven en otra máquina).
 2. **Token del CLI** (una vez, en el Mac): `claude setup-token` →
    en el LXC crear `/etc/bbw.env` con `CLAUDE_CODE_OAUTH_TOKEN=...` (600).
-3. **Copiar**: `rsync -a --exclude node_modules --exclude dist repo/ root@lxc:/opt/bbw/`
-   y aparte `data/` + `.env.local` (600).
+3. **Copiar**: `scripts/deploy/push.sh` — NO a mano. La lista de `--exclude`
+   se desincronizó estando en prosa y cada despliegue mandaba `Statements/`
+   (12 MB de PDFs bancarios) al contenedor. `data/` y `.env.local` se copian
+   aparte, una sola vez (600).
 4. **Provisionar**: `ssh root@lxc bash /opt/bbw/scripts/deploy/provision-lxc.sh`
 5. **Paridad**: `sudo -u bbw node /opt/bbw/dist/cli/process-window.js --dry-run`
    debe proponer lo mismo que el Mac.

@@ -17,8 +17,14 @@ STAMP=$(date +%Y-%m-%d-%H%M)
 OUT="$DEST/bbw-state-$STAMP.tar.gz"
 
 cd "$APP_DIR"
+# Statement PDFs are deliberately NOT in here: they are the most sensitive file
+# the pipeline holds and the most replaceable — the bank reissues them on
+# demand. Including them would also grow each snapshot ~35x (a month of the 13
+# accounts is ~4.6 MB against the 270 KB this file weighs today), which defeats
+# keeping many of them.
 tar czf "$OUT" \
   --exclude="data/backups-full" \
+  --exclude="data/statements/inbox" \
   --exclude="data/bot/*.log" \
   --exclude="data/*/debug" \
   data .env.local

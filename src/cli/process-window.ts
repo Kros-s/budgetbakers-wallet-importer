@@ -45,6 +45,7 @@ import { loadDirectCredentials } from "../direct-auth.js";
 import { deleteRecords, getRecord } from "../records.js";
 import { sendSafeMessage } from "../bot/telegram-safe.js";
 import { missingStatements } from "../statements/registry.js";
+import { pruneStatementInbox } from "../statements/inbox.js";
 import {
   EMAIL_MODEL, EMAIL_SYSTEM_PROMPT, buildEmailPrompt, processEmail,
 } from "../webhook/email-processor.js";
@@ -342,8 +343,12 @@ async function main() {
     const logs = pruneBotLogs(botDataDir);
     const olds = pruneLedgers(botDataDir);
     pruneVerdictLogs(botDataDir);
-    if (logs.deleted.length || olds.deleted.length) {
-      console.log(`   🧹 retención: ${logs.deleted.length} log(s) y ${olds.deleted.length} ledger(s) eliminados`);
+    const pdfs = pruneStatementInbox();
+    if (logs.deleted.length || olds.deleted.length || pdfs.deleted.length) {
+      console.log(
+        `   🧹 retención: ${logs.deleted.length} log(s), ${olds.deleted.length} ledger(s)` +
+          ` y ${pdfs.deleted.length} estado(s) de cuenta eliminados`
+      );
     }
   } catch (err) {
     console.error(`   ⚠ retención no pudo correr: ${err instanceof Error ? err.message : err}`);

@@ -32,6 +32,7 @@ import type { CsvRow } from "../csv.js";
 import { listRecordsByDateRange, writeRecords } from "../records.js";
 import { CATALOG_PROMPT } from "../webhook/email-processor.js";
 import { markReceived } from "../statements/registry.js";
+import { retireStatement } from "../statements/inbox.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -219,6 +220,10 @@ async function main() {
     }
   }
   markReceived(args.account, args.month);
+
+  // The PDF has served its purpose — unless something in it is still unresolved.
+  const retired = retireStatement(args.pdf, d.ambiguous.length);
+  console.log(retired.removed ? `🗑️ PDF retirado: ${retired.reason}.` : `📎 PDF conservado: ${retired.reason}.`);
 
   const bot = new Telegraf(config.telegramBotToken);
   const chatId = [...config.allowedChatIds][0];
