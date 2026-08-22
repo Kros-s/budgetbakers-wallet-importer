@@ -75,6 +75,7 @@ import {
 import { calendarPeriod } from "../statements/period.js";
 import {
   formatReconcileSummary, needsAttention, parseReconcileOutput, reconcileCommand, runReconcile,
+  SerialQueue,
 } from "./statement-flow.js";
 import { statementStatus } from "../statements/registry.js";
 import { candidateAmounts, findExistingByAmount, formatWalletContext } from "../webhook/wallet-context.js";
@@ -822,6 +823,7 @@ export function registerHandlers(deps: HandlerDeps): void {
   });
 
   // ── Statement routing ───────────────────────────────────────────────────
+  const statementQueue = new SerialQueue();
   // A dry run is proposed, never applied. The write pass replays the stored
   // extraction rather than reading the PDF again, so what gets committed is
   // exactly the diff that was shown.
@@ -861,9 +863,16 @@ export function registerHandlers(deps: HandlerDeps): void {
     const filed = path.join(INBOX_DIR, `${account.toLowerCase().replace(/\s+/g, "-")}-${month}.pdf`);
     fs.copyFileSync(localPath, filed);
 
-    await sendSafeMessage(d.bot.telegram, chatId, `📄 *${account} · ${month}* — conciliando contra Wallet, tarda un poco…`);
+    const ahead = statementQueue.pending;
+    await sendSafeMessage(
+      d.bot.telegram, chatId,
+      `📄 *${account} · ${month}* — conciliando contra Wallet, tarda un poco…` +
+        (ahead > 0 ? `\n_${ahead} en la fila antes de este._` : "")
+    );
 
-    const run = await runReconcile(reconcileCommand({ pdf: filed, account, month }));
+    const run = await statementQueue.run(() =>
+      runReconcile(reconcileCommand({ pdf: filed, account, month }))
+    );
     if (!run.ok) {
       await sendSafeMessage(
         d.bot.telegram, chatId,

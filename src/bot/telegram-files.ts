@@ -46,6 +46,11 @@ export async function downloadTelegramFile(
   const ext = inferExt(opts.mimeType ?? null, opts.fallbackExt ?? ".bin");
   const localPath = path.join(opts.downloadDir, `bot_${chatId}_${msgId}${ext}`);
 
+  // The directory was os.tmpdir() and always existed. Now it is under data/, so
+  // it has to be made — without this the first attachment after a fresh deploy
+  // fails with ENOENT, and every attachment after it.
+  fs.mkdirSync(opts.downloadDir, { recursive: true });
+
   const response = await axios.get(url, { responseType: "stream" });
   await pipeline(response.data, fs.createWriteStream(localPath));
 

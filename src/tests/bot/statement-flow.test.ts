@@ -93,3 +93,46 @@ test("the write pass replays the ledger instead of extracting again", () => {
   assert.ok(inv.args.includes("--write"));
   assert.ok(inv.args.includes("--from-ledger"));
 });
+
+test("statement jobs run one at a time, in order", async () => {
+  // Ten PDFs at once would start ten Claude extractions on a two-core box, and
+  // topping the usage limit mid-run burns the retries the pipeline needs.
+  const { SerialQueue } = await import("../../bot/statement-flow.js");
+  const q = new SerialQueue();
+  const order: string[] = [];
+  let running = 0;
+  let peak = 0;
+
+  const job = (name: string, ms: number) => async () => {
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise((r) => setTimeout(r, ms));
+    order.push(name);
+    running -= 1;
+  };
+
+  await Promise.all([q.run(job("a", 20)), q.run(job("b", 1)), q.run(job("c", 1))]);
+  assert.equal(peak, 1, "nunca dos a la vez");
+  assert.deepEqual(order, ["a", "b", "c"], "en el orden en que llegaron");
+});
+
+test("one failing job does not strand the batch behind it", async () => {
+  // A single unreadable PDF must not take the other nine with it.
+  const { SerialQueue } = await import("../../bot/statement-flow.js");
+  const q = new SerialQueue();
+  const boom = q.run(async () => { throw new Error("PDF ilegible"); });
+  const after = q.run(async () => "listo");
+  await assert.rejects(boom, /ilegible/);
+  assert.equal(await after, "listo");
+});
+
+test("the queue reports how many are waiting", async () => {
+  const { SerialQueue } = await import("../../bot/statement-flow.js");
+  const q = new SerialQueue();
+  assert.equal(q.pending, 0);
+  const a = q.run(() => new Promise((r) => setTimeout(r, 10)));
+  const b = q.run(async () => {});
+  assert.equal(q.pending, 2);
+  await Promise.all([a, b]);
+  assert.equal(q.pending, 0);
+});

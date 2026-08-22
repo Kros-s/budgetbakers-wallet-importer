@@ -135,3 +135,33 @@ export function runReconcile(inv: ReconcileInvocation, timeoutMs = 900_000): Pro
     });
   });
 }
+
+/**
+ * Runs statement jobs one at a time.
+ *
+ * Ten PDFs arriving together would otherwise start ten Claude extractions at
+ * once on a two-core container, and topping out the usage limit mid-run burns
+ * the retries the pipeline depends on. Queueing costs nothing — the user is
+ * sending a batch and waiting anyway — and it makes the order predictable.
+ */
+export class SerialQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+  private queued = 0;
+
+  /** How many jobs are waiting or running. */
+  get pending(): number {
+    return this.queued;
+  }
+
+  run<T>(job: () => Promise<T>): Promise<T> {
+    this.queued += 1;
+    // Chain off the previous job's settlement, not its value: one failure must
+    // not stop the queue, or a single unreadable PDF strands the whole batch.
+    const result = this.tail.then(job, job);
+    this.tail = result.then(
+      () => { this.queued -= 1; },
+      () => { this.queued -= 1; }
+    );
+    return result;
+  }
+}
