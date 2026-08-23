@@ -166,7 +166,7 @@ export function planMonth(
 
   // Rows still owed after Wallet has been consulted — only these can pair, and
   // only these can be written.
-  const outstanding: { account: string; row: CsvRow; led: LedgerRow }[] = [];
+  const outstanding: { account: string; row: CsvRow; led: LedgerRow; own?: string | null }[] = [];
   const usedWallet = new Set<LedgerRow>();
   for (const { account, rows } of usable) {
     for (const row of rows) {
@@ -176,12 +176,22 @@ export function planMonth(
         planned.push({ account, row, disposition: "recorded", reason: "ya está en Wallet" });
         continue;
       }
-      const [led] = toLedgerRows(account, [row]);
+      // A counterparty the statement names as one of the user's own accounts is
+      // a transfer leg, and it has to say so BEFORE the crossing runs.
+      // `crossTransfers` gives a row that claims to be a transfer first refusal
+      // on the legs it needs and hands anything else to the coincidence bucket,
+      // which nothing writes. Bancomer's `+163,202.91 PIER 5, S.A de C.V.` came
+      // out as `Wage, invoices` and DolarApp's `-9,300` as `Others`: both
+      // correctly held, and held permanently, because neither claimed to be the
+      // thing they both were.
+      const own = ownAccountFor(counterpartyText(row), account, { payee: row.payee });
+      const staged = own && !isTransferRow(row) ? { ...row, category: TRANSFER_CATEGORY } : row;
+      const [led] = toLedgerRows(account, [staged]);
       if (!led) {
         planned.push({ account, row, disposition: "hold", reason: "no pude leer su monto o su fecha" });
         continue;
       }
-      outstanding.push({ account, row, led });
+      outstanding.push({ account, row: staged, led, own });
     }
   }
 
@@ -223,7 +233,7 @@ export function planMonth(
   }
   const byLed = new Map(remaining.map((o) => [o.led, o]));
 
-  for (const { account, row, led } of remaining) {
+  for (const { account, row, led, own } of remaining) {
     const other = partner.get(led);
     if (other) {
       // Both legs are restated to the transfer category, and it matters: the
@@ -254,20 +264,17 @@ export function planMonth(
       });
       continue;
     }
-    if (isTransferRow(row)) {
-      planned.push({ account, row, disposition: "hold", reason: "traspaso sin contraparte todavía" });
-      continue;
-    }
-    // A counterparty the statement names as one of the user's own accounts.
-    // Unconditional, unlike the inflow rule below: completing the month's
-    // coverage is what releases an unexplained inflow, and completing it does
-    // nothing for this one. Bancomer's July carried three arrivals from
-    // DolarApp worth $285,876.01 whose other leg is in a currency no
-    // equal-amount rule can reach; with every statement in, they would have
-    // been written as income all the same.
-    const own = ownAccountFor(counterpartyText(row), account, { payee: row.payee });
+    // A counterparty the statement names as one of the user's own accounts,
+    // ahead of the generic transfer hold so the reason a human reads names the
+    // account rather than shrugging. Unconditional, unlike the inflow rule
+    // below: completing the month's coverage is what releases an unexplained
+    // inflow, and completing it does nothing for a leg in another currency.
     if (own) {
       planned.push({ account, row, disposition: "hold", reason: describeOwnCounterparty(own) });
+      continue;
+    }
+    if (isTransferRow(row)) {
+      planned.push({ account, row, disposition: "hold", reason: "traspaso sin contraparte todavía" });
       continue;
     }
     if (!opts.coverageComplete && isUnexplainedInflow(row)) {
