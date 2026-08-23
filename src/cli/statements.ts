@@ -16,7 +16,7 @@ import { formatStatementsTable } from "../bot/statements-view.js";
 import { formatCoverage } from "../statements/ledgers.js";
 import { countBy, formatPlan, writableRows } from "../statements/apply.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
-import { loadMonth } from "../statements/month-runner.js";
+import { MONTH_SPEC, loadMonth, monthsInSpec } from "../statements/month-runner.js";
 import { formatArrivals, unidentifiedArrivals } from "../statements/filing.js";
 
 function stripMarkdown(text: string): string {
@@ -34,8 +34,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!/^\d{4}-\d{2}$/.test(arg ?? "")) {
-    throw new Error(`Uso: statements.ts <status|cross|plan|apply> [YYYY-MM] [--write]`);
+  if (!MONTH_SPEC.test(arg ?? "")) {
+    throw new Error(
+      `Uso: statements.ts <status|cross|plan|apply> [YYYY-MM | YYYY-MM..YYYY-MM] [--write]`
+    );
   }
 
   const credentials = loadDirectCredentials();
@@ -68,7 +70,9 @@ async function main(): Promise<void> {
     }
     await commitGuardedWrite(guard, { lookup, existing: view.records, couch, userId: credentials.userId });
     console.log(`\n✍️ Escritos ${guard.records.length} registro(s).`);
-    console.log(`Para revertir: npm run snapshot -- undo ${arg}`);
+    // One undo per month in the range: every row carries the marker of the
+    // month it was extracted under, and `undo` matches that marker exactly.
+    for (const m of monthsInSpec(arg)) console.log(`Para revertir: npm run snapshot -- undo ${m}`);
     return;
   }
 

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { countBy, formatPlan, planMonth, writableRows } from "../../statements/apply.js";
 import { toWalletRows } from "../../statements/crossing.js";
+import { MONTH_SPEC, monthsInSpec } from "../../statements/month-runner.js";
 import type { CsvRow } from "../../csv.js";
 
 const r = (over: Partial<CsvRow> = {}): CsvRow => ({
@@ -236,4 +237,25 @@ test("a paired leg is restated to the transfer category so the write can link it
   const paired = plan.planned.filter((p) => p.disposition === "pair");
   assert.equal(paired.length, 2);
   for (const p of paired) assert.equal(p.row.category, "Transfer, withdraw");
+});
+
+// ── A range of months ─────────────────────────────────────────────────────
+
+test("a month spec names one month or a run of them", () => {
+  assert.deepEqual(monthsInSpec("2026-07"), ["2026-07"]);
+  assert.deepEqual(monthsInSpec("2026-06..2026-07"), ["2026-06", "2026-07"]);
+  assert.deepEqual(monthsInSpec("2026-11..2027-01"), ["2026-11", "2026-12", "2027-01"]);
+  // A backwards range is empty rather than infinite.
+  assert.deepEqual(monthsInSpec("2026-07..2026-06"), []);
+  // And a typo cannot walk a decade of ledgers.
+  assert.equal(monthsInSpec("2020-01..2030-12").length, 24);
+});
+
+test("the spec accepts a month or a range and refuses anything else", () => {
+  for (const good of ["2026-07", "2026-01", "2026-06..2026-07"]) {
+    assert.equal(MONTH_SPEC.test(good), true, good);
+  }
+  for (const bad of ["2026-13", "2026-7", "julio", "2026-06..", "2026-06..2026-13", ""]) {
+    assert.equal(MONTH_SPEC.test(bad), false, bad);
+  }
 });

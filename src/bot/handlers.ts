@@ -69,7 +69,7 @@ import { fileStatement, formatArrivals, unidentifiedArrivals } from "../statemen
 import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
 import { countBy, formatPlan, writableRows } from "../statements/apply.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
-import { loadMonth } from "../statements/month-runner.js";
+import { MONTH_SPEC, loadMonth } from "../statements/month-runner.js";
 import { listRecordsByDateRange } from "../records.js";
 import {
   alreadyInWallet, crossTransfers, formatCrossing, orphanTransferLegs,
@@ -937,8 +937,8 @@ export function registerHandlers(deps: HandlerDeps): void {
 
   bot.command("apply", async (ctx) => {
     const arg = ctx.message.text.split(/\s+/)[1]?.trim() ?? "";
-    if (!/^\d{4}-\d{2}$/.test(arg)) {
-      await ctx.reply("Uso: `/apply 2026-07`", { parse_mode: "Markdown" });
+    if (!MONTH_SPEC.test(arg)) {
+      await ctx.reply("Uso: `/apply 2026-07` o un rango, `/apply 2026-06..2026-07`", { parse_mode: "Markdown" });
       return;
     }
     await ctx.reply(`🗂️ Revisando ${arg}…`);
@@ -1022,8 +1022,8 @@ export function registerHandlers(deps: HandlerDeps): void {
 
   bot.command("plan", async (ctx) => {
     const arg = ctx.message.text.split(/\s+/)[1]?.trim() ?? "";
-    if (!/^\d{4}-\d{2}$/.test(arg)) {
-      await ctx.reply("Uso: `/plan 2026-07`", { parse_mode: "Markdown" });
+    if (!MONTH_SPEC.test(arg)) {
+      await ctx.reply("Uso: `/plan 2026-07` o un rango, `/plan 2026-06..2026-07`", { parse_mode: "Markdown" });
       return;
     }
     await ctx.reply(`🗂️ Armando el plan de ${arg}…`);
@@ -1046,8 +1046,8 @@ export function registerHandlers(deps: HandlerDeps): void {
 
   bot.command("cross", async (ctx) => {
     const arg = ctx.message.text.split(/\s+/)[1]?.trim() ?? "";
-    if (!/^\d{4}-\d{2}$/.test(arg)) {
-      await ctx.reply("Uso: `/cross 2026-07`", { parse_mode: "Markdown" });
+    if (!MONTH_SPEC.test(arg)) {
+      await ctx.reply("Uso: `/cross 2026-07` o un rango, `/cross 2026-06..2026-07`", { parse_mode: "Markdown" });
       return;
     }
     const coverage = monthCoverage(arg);
