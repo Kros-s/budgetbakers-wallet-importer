@@ -69,22 +69,82 @@ function rowTimes(row: CsvRow): number[] {
   return times.filter(Number.isFinite);
 }
 
+/** How many statement lines one Wallet record may stand for. */
+const MAX_GROUP = 4;
+
+/** Anything that carries a signed amount and the day the statement printed it. */
+export interface Summable {
+  cents: number;
+  day: string;
+}
+
 /**
- * A movement the statement itemises and Wallet holds netted.
+ * The one same-day group of two to four items that sums to `want`, or null.
  *
- * DolarApp publishes a deposit and the commission taken out of it as two lines
- * — `Compra USDc +3,600` and `Comisión -3` — while Wallet holds the single
- * $3,597 that actually arrived. Row by row neither matches anything, so both
- * land in `missing`, and `--write` posts them on top of the record already
- * there: $7,154 duplicated in June and $7,114 in July, on one account.
+ * Shared by both matchers so the guards cannot drift apart between the
+ * per-statement path and the month's. Null covers three different answers —
+ * no group, several groups, or groups on more than one day — and they are all
+ * the same instruction: leave it alone.
  *
- * Only the shape there is evidence for is claimed here: exactly two rows, of
- * opposite sign, summing to the record, both within the matcher's slack of it.
- * Two charges of the same sign summing to one record — $182 and $18 over a
- * $200 charge — is the same family and is NOT covered: it is far likelier to
- * be a coincidence, and this pass runs over everything the statement holds.
+ * Every subset is enumerated rather than solved greedily because the answer has
+ * to be known to be the ONLY one. Two different combinations reaching the same
+ * figure is what a coincidence looks like, and guessing between them writes
+ * some real movements while hiding others.
  */
-function matchNettedPairs(
+export function uniqueGroupSummingTo<T extends Summable>(items: T[], want: number): T[] | null {
+  const byDay = new Map<string, T[]>();
+  for (const it of items) byDay.set(it.day, [...(byDay.get(it.day) ?? []), it]);
+
+  let answer: T[] | null = null;
+  for (const sameDay of byDay.values()) {
+    const hits: T[][] = [];
+    const walk = (start: number, chosen: T[], total: number): void => {
+      if (chosen.length >= 2 && total === want) { hits.push([...chosen]); return; }
+      if (chosen.length >= MAX_GROUP || hits.length > 1) return;
+      for (let i = start; i < sameDay.length; i++) {
+        chosen.push(sameDay[i]);
+        walk(i + 1, chosen, total + sameDay[i].cents);
+        chosen.pop();
+        if (hits.length > 1) return;
+      }
+    };
+    walk(0, [], 0);
+    if (hits.length === 0) continue;
+    // A second answer, here or on another day, means nobody can say which.
+    if (hits.length > 1 || answer) return null;
+    answer = hits[0];
+  }
+  return answer;
+}
+
+/**
+ * Movements a statement itemises that Wallet holds as one record.
+ *
+ * Two real shapes, both found by reading real statements:
+ *
+ *   - DolarApp publishes a deposit and the commission taken out of it as two
+ *     lines — `Compra USDc +3,600` and `Comisión -3` — while Wallet holds the
+ *     single $3,597 that arrived. $7,154 duplicated in June, $7,114 in July.
+ *   - Banorte débito publishes an early mortgage payoff as four lines on one
+ *     day (299.00 + 178,901.66 + 21,568.34 + 2,198.00) where Wallet holds one
+ *     $202,967.00 record. That one is same-sign, which an opposite-sign rule
+ *     could never reach.
+ *
+ * Row by row none of them matches anything, so all of them land in `missing`
+ * and `--write` posts them on top of the record already there.
+ *
+ * Three constraints keep a coincidence from being read as a group, and they
+ * matter more than the matching does:
+ *
+ *   1. every line in the group carries the SAME date, as the statement printed
+ *      it. A bank splits one movement across lines on the day it happens, not
+ *      across a week.
+ *   2. at most four lines, so this cannot wander into subset-sum over a month.
+ *   3. the subset must be the ONLY one that sums to the record. Two different
+ *      combinations reaching the same figure is exactly what a coincidence
+ *      looks like, and it is left for a human rather than guessed at.
+ */
+function matchNettedGroups(
   missing: CsvRow[],
   free: WalletRecord[]
 ): { record: WalletRecord; rows: CsvRow[] }[] {
@@ -99,20 +159,14 @@ function matchNettedPairs(
         Number.isFinite(signedCents(r)) &&
         rowTimes(r).some((t) => Math.abs(at - t) <= DATE_SLACK_DAYS * DAY_MS)
     );
-    let pair: CsvRow[] | undefined;
-    for (let i = 0; i < near.length && !pair; i++) {
-      for (let j = i + 1; j < near.length && !pair; j++) {
-        const a = signedCents(near[i]);
-        const b = signedCents(near[j]);
-        // Opposite signs, and together exactly the record: a gross amount and
-        // the fee that came out of it.
-        if (a === 0 || b === 0 || (a > 0) === (b > 0)) continue;
-        if (a + b === want) pair = [near[i], near[j]];
-      }
-    }
-    if (!pair) continue;
-    pair.forEach((r) => taken.add(r));
-    found.push({ record, rows: pair });
+    const group = uniqueGroupSummingTo(
+      near.map((row) => ({ row, cents: signedCents(row), day: row.date.slice(0, 10) })),
+      want
+    );
+    if (!group) continue;
+    const rows = group.map((g) => g.row);
+    rows.forEach((r) => taken.add(r));
+    found.push({ record, rows });
   }
   return found;
 }
@@ -184,7 +238,7 @@ export function diff(rows: CsvRow[], existing: WalletRecord[], accountId: string
 
   // Second pass, over what neither side could answer alone.
   const free = inAccount.filter((r) => !usedRecordIds.has(r._id!));
-  const grouped = matchNettedPairs(missing, free);
+  const grouped = matchNettedGroups(missing, free);
   for (const g of grouped) {
     usedRecordIds.add(g.record._id!);
     matched += g.rows.length;

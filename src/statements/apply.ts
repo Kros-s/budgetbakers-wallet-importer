@@ -15,6 +15,7 @@
 import type { CsvRow } from "../csv.js";
 import { TRANSFER_CATEGORY, crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
 import { splitForWriting } from "./installments.js";
+import { uniqueGroupSummingTo } from "./reconcile-core.js";
 import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
 import { counterpartyText, isTransferRow } from "./write-policy.js";
 
@@ -169,30 +170,25 @@ export function planMonth(
     }
   }
 
-  // A movement the statement itemises and Wallet holds netted: DolarApp
-  // publishes `Compra USDc +3,600` and `Comisión -3` where Wallet holds the
-  // $3,597 that arrived. Row by row neither matches, so both would be written
-  // on top of the record already there. The same pass `diff()` runs on the
-  // per-statement path, and with the same restraint: exactly two rows, of
-  // opposite sign, summing to the record, near it in time.
+  // Movements the statement itemises and Wallet holds as one record: DolarApp's
+  // deposit-plus-commission where Wallet has the net, Banorte débito's mortgage
+  // payoff split across four same-day lines where Wallet has one $202,967.00.
+  // Row by row none of them matches, so all of them would be written on top of
+  // the record already there. Same guards as the per-statement path, from the
+  // same function so the two cannot drift apart.
   const netted = new Set<(typeof outstanding)[number]>();
   for (const w of wallet) {
     if (usedWallet.has(w)) continue;
     const near = outstanding.filter(
       (o) => !netted.has(o) && o.account === w.account && dayGap(o.led.date, w.date) <= MATCH_SLACK_DAYS
     );
-    let pair: typeof near | undefined;
-    for (let i = 0; i < near.length && !pair; i++) {
-      for (let j = i + 1; j < near.length && !pair; j++) {
-        const a = near[i].led.cents;
-        const b = near[j].led.cents;
-        if (a === 0 || b === 0 || (a > 0) === (b > 0)) continue;
-        if (a + b === w.cents) pair = [near[i], near[j]];
-      }
-    }
-    if (!pair) continue;
+    const group = uniqueGroupSummingTo(
+      near.map((o) => ({ o, cents: o.led.cents, day: o.led.date })),
+      w.cents
+    );
+    if (!group) continue;
     usedWallet.add(w);
-    for (const o of pair) {
+    for (const { o } of group) {
       netted.add(o);
       planned.push({
         account: o.account, row: o.row, disposition: "recorded",

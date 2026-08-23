@@ -221,19 +221,51 @@ test("a deposit and its fee are answered by the single net record Wallet holds",
   assert.deepEqual(d.grouped[0].rows.map((r) => r.amount).sort(), ["-3.00", "3600.00"]);
 });
 
-test("two charges of the same sign are not grouped, however well they add up", () => {
-  // $182 and $18 over a $200 charge is the same family and is deliberately not
-  // covered: this pass runs over everything a statement holds, and same-sign
-  // sums are far likelier to be a coincidence than a netted fee.
-  const rows: CsvRow[] = [
-    { date: "2026-06-22 12:00:00", account: "Bancomer", amount: "-182.00", category: "Groceries", note: "", payee: "A" },
-    { date: "2026-06-22 12:00:00", account: "Bancomer", amount: "-18.00", category: "Groceries", note: "", payee: "B" },
+const bd = (amount: string, payee: string, date = "2026-05-22 12:00:00"): CsvRow =>
+  ({ date, account: "Banorte débito", amount, category: "Others", note: "", payee });
+
+test("four same-day lines are answered by the one record Wallet holds for them", () => {
+  // Banorte débito publishes an early mortgage payoff as four lines on one day;
+  // Wallet holds a single $202,967.00 record. Same-sign, so no opposite-sign
+  // rule could ever reach it, and `--write` would have posted all four on top.
+  const rows = [
+    bd("-299.00", "ADMINISTRACION"),
+    bd("-178901.66", "PAGO DE CAPITAL"),
+    bd("-21568.34", "INTERESES"),
+    bd("-2198.00", "PAGO DE SEGUROS"),
   ];
-  const rec: WalletRecord = {
-    _id: "Record_200", accountId: "-Account_bancomer", amount: 20000, type: 1,
-    recordDate: "2026-06-22T12:00:00.000-06:00",
+  const lump: WalletRecord = {
+    _id: "Record_lump", accountId: "-Account_banorte", amount: 20296700, type: 1,
+    recordDate: "2026-05-22T12:00:00.000-06:00", note: "[Claude] Pago anticipado hipoteca",
   } as WalletRecord;
-  const d = diff(rows, [rec], "-Account_bancomer");
+  const d = diff(rows, [lump], "-Account_banorte");
+  assert.equal(d.missing.length, 0);
+  assert.equal(d.walletOnly.length, 0);
+  assert.equal(d.grouped.length, 1);
+  assert.equal(d.grouped[0].rows.length, 4);
+});
+
+test("two different combinations reaching the same figure are left for a human", () => {
+  // That is what a coincidence looks like, and guessing between them writes
+  // some real movements and hides others.
+  const rows = [bd("-50.00", "A"), bd("-50.00", "B"), bd("-100.00", "C")];
+  const rec: WalletRecord = {
+    _id: "Record_100", accountId: "-Account_banorte", amount: 10000, type: 1,
+    recordDate: "2026-05-22T12:00:00.000-06:00",
+  } as WalletRecord;
+  const d = diff(rows, [rec], "-Account_banorte");
+  assert.equal(d.grouped.length, 0);
+});
+
+test("lines spread across days are not one movement", () => {
+  // A bank splits one movement across lines on the day it happens, not across
+  // a week — and a week of unmatched rows is where subset-sum finds ghosts.
+  const rows = [bd("-182.00", "A", "2026-05-20 12:00:00"), bd("-18.00", "B", "2026-05-22 12:00:00")];
+  const rec: WalletRecord = {
+    _id: "Record_200", accountId: "-Account_banorte", amount: 20000, type: 1,
+    recordDate: "2026-05-21T12:00:00.000-06:00",
+  } as WalletRecord;
+  const d = diff(rows, [rec], "-Account_banorte");
   assert.equal(d.grouped.length, 0);
   assert.equal(d.missing.length, 2);
 });
