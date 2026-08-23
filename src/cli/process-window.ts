@@ -333,8 +333,16 @@ async function main() {
   // resumed or partial run).
   const backlog = loadPendingBacklog();
   const overdue = missingStatements();
+  // Naming all of them was fine with four accounts and one month each. With
+  // fourteen accounts and a May-to-August backlog it printed a 45-item line
+  // that nobody can read, which is the same as printing nothing. The totals are
+  // stated in full — no month is hidden — and /statements has the table.
+  const nagAccounts = [...new Set(overdue.map((o) => o.account))];
+  const oldest = overdue.reduce((a, b) => (a.month < b.month ? a : b), overdue[0]);
   const statementNag = overdue.length
-    ? `\n📄 Estados de cuenta faltantes: ${overdue.map((o) => `${o.account} (${o.month})`).join(", ")} — mándame el PDF por Telegram o déjalo en data/statements/inbox/`
+    ? `\n📄 Faltan ${overdue.length} estado(s) de cuenta en ${nagAccounts.length} cuenta(s), ` +
+      `el más viejo ${oldest.month} (${oldest.account}). Usa /statements para la tabla completa, ` +
+      `o mándame el PDF por Telegram.`
     : "";
   // Retention. Ledgers are pruned only after the run has closed its own, so the
   // newest one on disk is always this run's — the watermark is never at risk.
@@ -370,7 +378,8 @@ async function main() {
           id: doc._id,
           amountCents: Number(doc.amount),
           type: Number(doc.type),
-          transfer: Boolean(doc.transfer),
+          // Either field means "transfer" — iOS sets only transferId.
+          transfer: Boolean(doc.transfer || doc.transferId),
           accountId: String(doc.accountId),
           categoryName: categoryNames[String(doc.categoryId)],
           payee: doc.payee,

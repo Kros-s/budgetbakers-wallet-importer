@@ -40,6 +40,7 @@ import {
 import { chargesMismatch, parseDeclaredCharges } from "../statements/extraction.js";
 import { describeIgnored } from "../statements/installments.js";
 import { describeHeld, planWrites } from "../statements/write-policy.js";
+import { toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -256,10 +257,20 @@ async function reconcile(
   // A transfer leg waits for the month's crossing to find its other half; a
   // purchase or an interest payment exists on one statement only and nothing
   // still in the post can duplicate it.
-  const { now: writable, held, ignored } = planWrites(d.missing);
+  // Wallet's own records for the window are the counterparts already known;
+  // a candidate that one of them answers is not ours to write yet.
+  const otherAccounts: Record<string, string> = {};
+  for (const [name, id] of Object.entries(lookup.accounts)) otherAccounts[id] = name;
+  const elsewhere = toWalletRows(existing, otherAccounts, lookup.transferCategoryId ?? undefined)
+    .filter((r) => r.account !== args.account);
+
+  const { now: writable, held, heldReasons, ignored } = planWrites(d.missing, {
+    account: args.account,
+    elsewhere,
+  });
   if (held.length > 0) {
-    console.log(`⏸️ ${held.length} pata(s) de traspaso en espera del cruce del mes:`);
-    console.log(describeHeld(held).split("\n").map((l) => `   ${l}`).join("\n"));
+    console.log(`⏸️ ${held.length} en espera del cruce del mes:`);
+    console.log(describeHeld(held, heldReasons).split("\n").map((l) => `   ${l}`).join("\n"));
   }
   if (ignored.length > 0) {
     console.log(`🔁 ${ignored.length} parcialidad(es) de compras a meses, ignoradas a propósito:`);

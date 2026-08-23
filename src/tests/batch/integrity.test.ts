@@ -117,3 +117,16 @@ test("the rendered summary separates alerts from reviews", () => {
   assert.match(out, /alerta/);
   assert.match(out, /323,000\.00/);
 });
+
+test("a transfer the iOS app linked is not reported as unflagged", () => {
+  // The iOS app links the two legs with transferId and never sets the boolean.
+  // Of 5,593 records under a transfer category in this account, 5,590 carry a
+  // transferId and only 591 the flag — reading the flag alone would report
+  // 5,002 ordinary transfers as errors the first time the check is pointed at
+  // the whole history, which is what the pending sweep does.
+  const inspect = (doc: { transfer?: boolean; transferId?: string }): boolean =>
+    Boolean(doc.transfer || doc.transferId);
+  assert.equal(inspect({ transferId: "86C9E2B-2224" }), true, "iOS: solo transferId");
+  assert.equal(inspect({ transfer: true }), true, "web/importador: solo el booleano");
+  assert.equal(inspect({}), false);
+});

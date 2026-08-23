@@ -15,6 +15,7 @@
 
 import type { CsvRow } from "../csv.js";
 import { splitForWriting } from "./installments.js";
+import { crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
 
 /** The categories Wallet uses for a transfer leg, in the spellings the extractor emits. */
 export function isTransferRow(row: CsvRow): boolean {
@@ -26,20 +27,68 @@ export interface WritePlan {
   now: CsvRow[];
   /** Transfer legs: they wait for the month's crossing to find their other half. */
   held: CsvRow[];
+  /** Why each held row is held, parallel to `held`. */
+  heldReasons: string[];
   /** Later instalments of a deferred purchase, deliberately left out. */
   ignored: CsvRow[];
 }
 
-export function planWrites(rows: CsvRow[]): WritePlan {
+/**
+ * Holds a row whose amount is answered by an opposite movement in another
+ * account, whatever category it was given.
+ *
+ * The category alone is not enough. Klar's July statement carried a single
+ * +$210,000 row categorised "Financial investments"; its other leg, -$210,000
+ * leaving Banorte débito, was already in Wallet. Written on the strength of its
+ * category it would have booked a quarter of a million as standalone income.
+ *
+ * Holding costs a delay; writing costs a duplicate, so a doubtful row waits.
+ */
+function counterpartHold(
+  candidates: CsvRow[],
+  account: string,
+  elsewhere: LedgerRow[]
+): Map<CsvRow, string> {
+  if (elsewhere.length === 0) return new Map();
+  const mine = toLedgerRows(account, candidates);
+  const { pairs, possible } = crossTransfers([...mine, ...elsewhere]);
+  const byIndex = new Map<CsvRow, string>();
+  for (const p of [...pairs, ...possible]) {
+    for (const [leg, other] of [[p.out, p.in], [p.in, p.out]] as const) {
+      if (leg.account !== account || other.account === account) continue;
+      const i = mine.indexOf(leg);
+      if (i >= 0) byIndex.set(candidates[i], `contraparte de $${Math.abs(other.cents / 100).toFixed(2)} en ${other.account}`);
+    }
+  }
+  return byIndex;
+}
+
+export function planWrites(
+  rows: CsvRow[],
+  opts: { account?: string; elsewhere?: LedgerRow[] } = {}
+): WritePlan {
   const { writable, ignored } = splitForWriting(rows);
   const now: CsvRow[] = [];
   const held: CsvRow[] = [];
-  for (const row of writable) (isTransferRow(row) ? held : now).push(row);
-  return { now, held, ignored };
+  const heldReasons: string[] = [];
+
+  const byCategory = writable.filter(isTransferRow);
+  const rest = writable.filter((r) => !isTransferRow(r));
+  for (const row of byCategory) { held.push(row); heldReasons.push("categoría de traspaso"); }
+
+  const hold = opts.account ? counterpartHold(rest, opts.account, opts.elsewhere ?? []) : new Map();
+  for (const row of rest) {
+    const why = hold.get(row);
+    if (why) { held.push(row); heldReasons.push(why); } else { now.push(row); }
+  }
+  return { now, held, heldReasons, ignored };
 }
 
-export function describeHeld(held: CsvRow[]): string {
+export function describeHeld(held: CsvRow[], reasons: string[] = []): string {
   return held
-    .map((r) => `${r.date.slice(0, 10)} $${r.amount} ${r.payee || r.note || ""}`)
+    .map((r, i) => {
+      const why = reasons[i] ? ` — ${reasons[i]}` : "";
+      return `${r.date.slice(0, 10)} $${r.amount} ${r.payee || r.note || ""}${why}`;
+    })
     .join("\n");
 }

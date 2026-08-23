@@ -17,6 +17,17 @@ export interface InspectedRecord {
   amountCents: number;
   /** 0 = income, 1 = expense. */
   type: number;
+  /**
+   * Whether Wallet considers this a leg of a transfer.
+   *
+   * Two fields carry that, and which one is set depends on where the record was
+   * created: the iOS app links legs with `transferId` and leaves the boolean
+   * unset, while the web app and this importer set the boolean. Of 5,593
+   * records under a transfer category, 5,590 carry a transferId and only 591
+   * carry the flag — so reading the flag alone calls 5,002 perfectly ordinary
+   * transfers unflagged. Harmless while this only inspects what a run just
+   * wrote; ruinous the first time it is pointed at the whole history.
+   */
   transfer: boolean;
   accountId: string;
   categoryName?: string;
