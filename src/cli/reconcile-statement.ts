@@ -193,6 +193,11 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `deudor $32,453.04 se escriben SALDO_INICIAL: -21823.19 y SALDO_FINAL: -32453.04, y lo extraído ` +
     `(50 cargos menos 3 pagos) suma exactamente esa diferencia. NUNCA los pongas en positivo: eso ` +
     `invertiría el cuadre y lo daría por bueno al revés.\n` +
+    `- Si una tarjeta imprime "Saldo deudor total: $0.00" pero en el mismo bloque declara un ` +
+    `"Pago para no generar intereses" o un "Saldo cargos regulares" distinto de cero, el $0.00 es un ` +
+    `error del propio estado: usa esa otra cifra como SALDO_FINAL. Nu lo hace todos los meses — ` +
+    `imprime "Saldo deudor total $0.00" junto a "Saldo cargos regulares $1,738.56" y un crédito ` +
+    `disponible de $138,261.44 sobre una línea de $140,000, que solo cuadra con los $1,738.56.\n` +
     `Si el PDF no se puede leer (protegido/corrupto), responde solo: PDF_UNREADABLE`
   );
 }
@@ -302,6 +307,7 @@ async function reconcile(
   const { now: writable, held, heldReasons, ignored, cash } = planWrites(d.missing, {
     account: args.account,
     elsewhere,
+    ledger: rows,
   });
   if (held.length > 0) {
     console.log(`⏸️ ${held.length} en espera del cruce del mes:`);
@@ -327,7 +333,7 @@ async function reconcile(
     // arrivals from DolarApp booked as $285,876.01 of income — are worth
     // reading before the flag goes on, not after.
     if (writable.length > 0) {
-      const preview = await guardWrite(writable, { lookup, existing });
+      const preview = await guardWrite(writable, { lookup, existing, ledger: rows });
       const report = formatGuardReport(preview);
       if (report.trim()) console.log(`\n${report}`);
     }
@@ -360,7 +366,7 @@ async function reconcile(
   // a number no run had produced.
   let written = 0;
   if (writable.length > 0) {
-    const guard = await guardWrite(writable, { lookup, existing });
+    const guard = await guardWrite(writable, { lookup, existing, ledger: rows });
     skippedRows = guard.skipped.length;
     blocked = guard.blocked;
     const report = formatGuardReport(guard);
@@ -368,7 +374,7 @@ async function reconcile(
     if (guard.blocked) {
       console.error(`\n⛔ No se escribe nada: la verificación de integridad levantó alerta(s).`);
     } else if (guard.records.length > 0) {
-      await commitGuardedWrite(guard, { lookup, existing, couch, userId: ctx.userId });
+      await commitGuardedWrite(guard, { lookup, existing, ledger: rows, couch, userId: ctx.userId });
       written = guard.records.length;
       console.log(`\n✍️ Escritos ${written} registro(s) con nota [Claude reconcile ${args.month}].`);
     } else {

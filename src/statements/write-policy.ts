@@ -112,9 +112,12 @@ function couldBeTransfer(a: LedgerRow, b: LedgerRow): boolean {
 
 export function planWrites(
   rows: CsvRow[],
-  opts: { account?: string; elsewhere?: LedgerRow[] } = {}
+  opts: { account?: string; elsewhere?: LedgerRow[]; ledger?: CsvRow[] } = {}
 ): WritePlan {
-  const { writable, ignored } = splitForWriting(rows);
+  // `rows` is what Wallet is missing; `ledger` is the whole statement. A
+  // deferral has to be resolved against the whole thing — its original charge
+  // may be recorded already, and then it is not among the missing.
+  const { writable, ignored } = splitForWriting(rows, opts.ledger ?? rows);
   const now: CsvRow[] = [];
   const held: CsvRow[] = [];
   const heldReasons: string[] = [];

@@ -160,3 +160,23 @@ test("an unrelated charge of the same size is not mistaken for the purchase", ()
   ]);
   assert.equal(writable.length, 2);
 });
+
+test("a deferral resolves against the whole statement, not just what is missing", () => {
+  // Amex Platinum's June: the charge (`WALMART VENTA EN LINEA`, 17-may, $6,316)
+  // is already recorded in Wallet, so it is not among the missing rows.
+  // Looking only there found nothing, kept the `1/3`, restated it to $6,316 and
+  // wrote the purchase a second time.
+  const charge = platinum({ date: "2026-05-17 12:00:00", amount: "-6316.00", payee: "WALMART VENTA EN LINEA", category: "Shopping" });
+  const credit = platinum({ date: "2026-06-06 12:00:00", amount: "6316.00", payee: "MONTO A DIFERIR", category: "Transfer, withdraw" });
+  const first = platinum({ date: "2026-06-06 12:00:00", amount: "-2105.34", meses: "1/3", montooriginal: "6316.00" });
+  const statement = [charge, credit, first];
+
+  // Only the credit and the instalment are missing; the charge is in Wallet.
+  const { writable, ignored } = splitForWriting([credit, first], statement);
+  assert.equal(writable.length, 0);
+  assert.equal(ignored.length, 2);
+
+  // Without the statement for context, the old behaviour: the purchase again.
+  const blind = splitForWriting([credit, first]);
+  assert.deepEqual(blind.writable.map((r) => r.amount), ["-6316.00"]);
+});

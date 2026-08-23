@@ -124,6 +124,14 @@ export interface GuardInput {
   slackMs?: number;
   /** Above this, a non-transfer record is worth a human glance. Defaults to integrity.ts's $50,000. */
   largeAmountCents?: number;
+  /**
+   * The whole statement, when `rows` is only the part being written.
+   *
+   * A deferred purchase is resolved against everything the statement holds: its
+   * original charge may already be in Wallet, and looking only at the rows
+   * being written found nothing and booked the purchase twice.
+   */
+  ledger?: CsvRow[];
 }
 
 /** What `commitGuardedWrite` additionally needs to post the records. */
@@ -237,7 +245,7 @@ export async function guardWrite(rows: CsvRow[], ctx: GuardInput): Promise<Guard
   // `planWrites`, which has already done this; a future caller may not, and a
   // later instalment written at face value is a charge the user never agreed
   // to record. Re-restating a first instalment yields the same figure.
-  const { writable: staged, ignored } = splitForWriting(rows);
+  const { writable: staged, ignored } = splitForWriting(rows, ctx.ledger ?? rows);
 
   // A cash withdrawal is a transfer to the cash account, and both legs have to
   // exist before `convertRows` runs — that is what links them into a pair. The

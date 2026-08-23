@@ -103,20 +103,26 @@ const cents = (text: string | undefined): number => Math.round(parseMoney(text) 
  * Nothing here changes the arithmetic. Every row was extracted and still counts
  * toward the totals the statement publishes; this decides only what is written.
  */
-function resolveDeferrals(rows: CsvRow[]): Set<CsvRow> {
+function resolveDeferrals(rows: CsvRow[], context: CsvRow[]): Set<CsvRow> {
   const drop = new Set<CsvRow>();
   for (const first of rows) {
     if (!isFirstInstallment(first) || !first.montooriginal) continue;
     const full = cents(first.montooriginal);
     if (!Number.isFinite(full) || full === 0) continue;
 
-    const credit = rows.find((r) => r !== first && !drop.has(r) && cents(r.amount) === full);
+    const credit = context.find((r) => r !== first && !drop.has(r) && cents(r.amount) === full);
     if (!credit) continue;
     drop.add(credit);
 
     // The purchase itself: same size, money going out, and not an instalment
     // line of its own — those are the parts of this same deferral.
-    const charge = rows.find(
+    //
+    // Searched in `context`, the whole statement, rather than in the rows being
+    // written. Amex Platinum's June has the charge (`WALMART VENTA EN LINEA`,
+    // 17-may, $6,316) already recorded in Wallet, so it is not among the
+    // missing rows — and looking there found nothing, kept the `1/3`, restated
+    // it to $6,316 and wrote the purchase a second time.
+    const charge = context.find(
       (r) => r !== first && r !== credit && !drop.has(r) &&
         cents(r.amount) === -full && !parseInstallment(r)
     );
@@ -125,10 +131,17 @@ function resolveDeferrals(rows: CsvRow[]): Set<CsvRow> {
   return drop;
 }
 
-export function splitForWriting(rows: CsvRow[]): WriteSplit {
+/**
+ * @param rows    the rows being considered for writing.
+ * @param context the whole statement, when `rows` is only part of it. A
+ *                deferral is resolved against everything the statement holds,
+ *                including lines already recorded in Wallet and therefore
+ *                absent from `rows`.
+ */
+export function splitForWriting(rows: CsvRow[], context: CsvRow[] = rows): WriteSplit {
   const writable: CsvRow[] = [];
   const ignored: CsvRow[] = [];
-  const drop = resolveDeferrals(rows);
+  const drop = resolveDeferrals(rows, context);
   for (const row of rows) {
     if (isLaterInstallment(row)) { ignored.push(row); continue; }
     if (drop.has(row)) { ignored.push(row); continue; }
