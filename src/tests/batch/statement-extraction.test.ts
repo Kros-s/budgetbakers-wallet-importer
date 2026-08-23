@@ -114,3 +114,15 @@ test("with no declared balance the charges total is all there is", () => {
   assert.match(verdict.blocking ?? "", /faltan \$20\.00/);
   assert.equal(verdict.note, null);
 });
+
+test("a balance read backwards is named as such, not sent hunting for pots", () => {
+  // A credit card states what you owe. Banorte's July grew from $21,823.19 to
+  // $32,453.04 of debt: the account moved -$10,629.85. Written positive, the
+  // check would report a $21,259.70 gap and blame internal buckets.
+  const rows: CsvRow[] = [
+    { date: "2026-06-15 12:00:00", account: "Banorte", amount: "-32453.04", category: "Shopping", note: "", payee: "" },
+    { date: "2026-06-11 12:00:00", account: "Banorte", amount: "21823.19", category: "Transfer, withdraw", note: "", payee: "" },
+  ];
+  assert.equal(netMismatch(rows, -1062985), null);
+  assert.match(netMismatch(rows, 1062985) ?? "", /signo contrario/);
+});

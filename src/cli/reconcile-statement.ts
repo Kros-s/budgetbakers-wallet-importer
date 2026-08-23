@@ -159,6 +159,12 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- "SALDO_INICIAL: <n>" y "SALDO_FINAL: <n>" con el saldo TOTAL de la cuenta al abrir y al cerrar el ` +
     `periodo. Si el estado tiene varias bolsas internas (cuenta principal, apartados, plazo fijo, ` +
     `depósito garantizado), SUMA todas: es el saldo de la cuenta completa. "NA" si no lo declara.\n` +
+    `- EN UNA TARJETA DE CRÉDITO el saldo es lo que DEBES, así que va en NEGATIVO: SALDO_INICIAL es ` +
+    `"Adeudo del periodo anterior" con signo menos y SALDO_FINAL es el "Saldo deudor total" (o "Saldo ` +
+    `al corte") también con signo menos. Ejemplo real de Banorte: adeudo anterior $21,823.19 y saldo ` +
+    `deudor $32,453.04 se escriben SALDO_INICIAL: -21823.19 y SALDO_FINAL: -32453.04, y lo extraído ` +
+    `(50 cargos menos 3 pagos) suma exactamente esa diferencia. NUNCA los pongas en positivo: eso ` +
+    `invertiría el cuadre y lo daría por bueno al revés.\n` +
     `Si el PDF no se puede leer (protegido/corrupto), responde solo: PDF_UNREADABLE`
   );
 }

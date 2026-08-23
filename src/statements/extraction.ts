@@ -86,6 +86,16 @@ export function netMismatch(rows: CsvRow[], declaredNetCents: number | null): st
   const diff = declaredNetCents - got;
   if (Math.abs(diff) <= TOLERANCE_CENTS) return null;
   const peso = (c: number) => `$${(c / 100).toFixed(2)}`;
+  // Equal in size and opposite in sign is not a missing movement, it is the
+  // convention read backwards — a credit card states what you owe, and a debt
+  // written as a positive balance turns a month that grew by $10,629.85 into
+  // one that shrank by it. Saying so beats sending the reader hunting for pots.
+  if (Math.abs(declaredNetCents + got) <= TOLERANCE_CENTS && got !== 0) {
+    return (
+      `el saldo declarado (${peso(declaredNetCents)}) y lo extraído (${peso(got)}) son iguales y de ` +
+      `signo contrario: el saldo se leyó al revés. En una tarjeta de crédito el adeudo va en negativo`
+    );
+  }
   return (
     `el saldo de la cuenta se movió ${peso(declaredNetCents)} en el periodo y lo extraído suma ` +
     `${peso(got)} — faltan o sobran ${peso(Math.abs(diff))}. Revisa si el estado tiene bolsas internas ` +
