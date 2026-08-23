@@ -40,7 +40,7 @@ import { loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../statements/period.js";
-import { chargesMismatch, parseDeclaredCharges } from "../statements/extraction.js";
+import { chargesMismatch, netMismatch, parseDeclaredCharges, parseDeclaredNet } from "../statements/extraction.js";
 import { describeIgnored } from "../statements/installments.js";
 import { describeHeld, planWrites } from "../statements/write-policy.js";
 import { toWalletRows } from "../statements/crossing.js";
@@ -125,6 +125,11 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- note SIEMPRE exactamente "[Claude reconcile ${args.month}]".\n` +
     `- payee: el nombre del comercio tal como aparece.\n` +
     `- Asigna la categoría más razonable del catálogo. Pagos RECIBIDOS a la tarjeta (abonos "SU PAGO", "PAGO RECIBIDO") usa "Transfer, withdraw".\n` +
+    `- BOLSAS INTERNAS: si el estado divide la cuenta en varias bolsas (p.ej. Klar tiene "Cuenta ` +
+    `Principal", "Apartados de inversión", "Plazo Fijo"), un movimiento ENTRE ellas NO mueve la cuenta y ` +
+    `NO se extrae — el dinero sigue en la misma institución. Ejemplo real: un "Monto Invertido" de ` +
+    `$210,000 que va del plazo fijo a la cuenta principal netea a cero. Extrae solo lo que cambia el ` +
+    `TOTAL: rendimientos, comisiones, impuestos, y el dinero que entra o sale de la institución.\n` +
     `- INTERESES GANADOS: cada pago de intereses que el estado publique como movimiento es UN renglón, ` +
     `con la fecha en que se pagó. NO los sumes ni los agregues en uno solo: si el banco publica 23 pagos ` +
     `diarios, van 23 renglones. Categoría "Interests, dividends" (rendimientos que RECIBES).\n` +
@@ -146,6 +151,9 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- "PERIODO: <inicio>..<fin>" en YYYY-MM-DD, con el periodo que el propio estado declara ` +
     `(busca "Periodo", "Fecha de corte", "Fecha inicio/fin"). Cópialo del PDF; no lo deduzcas del nombre del archivo.\n` +    `- "CARGOS_DECLARADOS: <n>" con el total de cargos/compras del periodo TAL COMO lo declara el estado ` +
     `en su resumen (no lo sumes tú). Si el estado no da ese total, escribe "CARGOS_DECLARADOS: NA".\n` +
+    `- "SALDO_INICIAL: <n>" y "SALDO_FINAL: <n>" con el saldo TOTAL de la cuenta al abrir y al cerrar el ` +
+    `periodo. Si el estado tiene varias bolsas internas (cuenta principal, apartados, plazo fijo, ` +
+    `depósito garantizado), SUMA todas: es el saldo de la cuenta completa. "NA" si no lo declara.\n` +
     `Si el PDF no se puede leer (protegido/corrupto), responde solo: PDF_UNREADABLE`
   );
 }
@@ -433,7 +441,11 @@ async function main() {
   // The row count is self-reported and stays consistent when a movement is
   // dropped. The statement's own totals are the only figure the extractor
   // cannot satisfy by being self-consistent.
-  const chargeWarn = chargesMismatch(rows, parseDeclaredCharges(result.text));
+  // Two balances, and the second is the stronger one: charges can balance while
+  // the extraction is entirely wrong about which movements exist.
+  const chargeWarn =
+    chargesMismatch(rows, parseDeclaredCharges(result.text)) ??
+    netMismatch(rows, parseDeclaredNet(result.text));
   const declared = parsePeriodLine(result.text);
 
   // ── Persist normalized statement ledger ──
@@ -442,6 +454,7 @@ async function main() {
     account: args.account, month: args.month, extractedAt: new Date().toISOString(),
     period: declared,
     chargesDeclared: parseDeclaredCharges(result.text),
+    netDeclared: parseDeclaredNet(result.text),
     sourcePdf: path.basename(args.pdf), rows,
   }, null, 2));
   console.log(`Ledger del estado: ${ledgerPath}`);

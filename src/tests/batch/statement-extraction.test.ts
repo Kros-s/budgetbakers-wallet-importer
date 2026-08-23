@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chargesMismatch, extractedChargesCents, parseDeclaredCharges } from "../../statements/extraction.js";
+import {
+  chargesMismatch, extractedChargesCents, extractedNetCents, netMismatch,
+  parseDeclaredCharges, parseDeclaredNet,
+} from "../../statements/extraction.js";
 import type { CsvRow } from "../../csv.js";
 
 const row = (amount: string): CsvRow =>
@@ -46,4 +49,31 @@ test("extracting more than the statement declares is flagged too", () => {
   const warn = chargesMismatch([row("-327.08"), row("-50")], 32708);
   assert.match(warn ?? "", /sobran \$50\.00/);
   assert.match(warn ?? "", /duplicadas/);
+});
+
+test("the account's own opening and closing balances catch what charges cannot", () => {
+  // Klar's real July: $210,000 moved from its fixed-term pot back to its main
+  // account, and the extractor emitted that as the month's only movement while
+  // emitting none of the $2,420.82 of earnings that were the only real change.
+  // There were no charges, so the charges check had nothing to object to.
+  const wrong = [row("210000.00")];
+  const declared = parseDeclaredNet("SALDO_INICIAL: 251,325.80\nSALDO_FINAL: 253,746.62");
+  assert.equal(declared, 242082);
+  const warn = netMismatch(wrong, declared);
+  assert.match(warn ?? "", /se movió \$2420\.82/);
+  assert.match(warn ?? "", /bolsas internas/);
+});
+
+test("the right extraction of that month balances", () => {
+  const right = [row("1967.67"), row("485.36"), row("-32.21")];
+  assert.equal(netMismatch(right, 242082), null);
+});
+
+test("a net that the statement does not declare yields no verdict", () => {
+  assert.equal(parseDeclaredNet("SALDO_INICIAL: NA\nSALDO_FINAL: NA"), null);
+  assert.equal(netMismatch([row("-10")], null), null);
+});
+
+test("the net counts money in and money out, not just charges", () => {
+  assert.equal(extractedNetCents([row("-197.08"), row("3268.48")]), 307140);
 });

@@ -23,6 +23,7 @@ export interface StoredLedger {
   extractedAt: string;
   period: { from: string; to: string } | null;
   chargesDeclared?: number | null;
+  netDeclared?: number | null;
   sourcePdf: string;
   rows: CsvRow[];
 }
