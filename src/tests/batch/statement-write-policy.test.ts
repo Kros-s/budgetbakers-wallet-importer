@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isTransferRow, planWrites } from "../../statements/write-policy.js";
-import { toWalletRows } from "../../statements/crossing.js";
+import { toLedgerRows, toWalletRows } from "../../statements/crossing.js";
 import type { CsvRow } from "../../csv.js";
 
 const row = (over: Partial<CsvRow> = {}): CsvRow => ({
@@ -172,4 +172,40 @@ test("a cash withdrawal leaves as a pair, and is not held waiting for a statemen
   assert.equal(plan.cash.length, 1);
   assert.deepEqual(plan.now.map((r) => r.account), ["Bancomer", "Wallet"]);
   assert.deepEqual(plan.now.map((r) => r.amount), ["-2600.00", "2600.00"]);
+});
+
+test("two unrelated merchants of the same size are not a transfer", () => {
+  // Platinum's -$300.00 STARBUCKS and Mercado Pago's +$300.00 from
+  // "Ferreteria Ceylan" fell on the same month and the same figure. Holding the
+  // Starbucks charge for a crossing that will never come keeps the month open
+  // for nothing.
+  const plan = planWrites(
+    [row({ account: "Platinum Credit Card", amount: "-300.00", category: "Bar, cafe", payee: "STARBUCKS" })],
+    {
+      account: "Platinum Credit Card",
+      elsewhere: toLedgerRows("Mercado pago", [
+        row({ account: "Mercado pago", amount: "300.00", category: "Others", payee: "Ferreteria Ceylan" }),
+      ]),
+    }
+  );
+  assert.equal(plan.now.length, 1);
+  assert.equal(plan.held.length, 0);
+});
+
+test("a coincidence still holds when one side names nobody", () => {
+  // Klar's July: +$210,000 categorised "Financial investments", its other leg
+  // -$210,000 leaving Banorte débito. Neither claimed to be a transfer, and
+  // written on the strength of its category it booked a quarter of a million as
+  // standalone income.
+  const plan = planWrites(
+    [row({ account: "Klar", amount: "210000.00", category: "Financial investments", payee: "" })],
+    {
+      account: "Klar",
+      elsewhere: toLedgerRows("Banorte débito", [
+        row({ account: "Banorte débito", amount: "-210000.00", category: "Others", payee: "" }),
+      ]),
+    }
+  );
+  assert.equal(plan.held.length, 1);
+  assert.match(plan.heldReasons[0], /contraparte de \$210000\.00/);
 });

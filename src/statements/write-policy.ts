@@ -16,7 +16,7 @@
 import type { CsvRow } from "../csv.js";
 import { splitForWriting } from "./installments.js";
 import { crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
-import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
+import { describeOwnCounterparty, namesHolder, ownAccountFor, statementHolder } from "./own-accounts.js";
 import { CASH_ACCOUNT, expandCashWithdrawals, isCashWithdrawal } from "./cash.js";
 
 /** The categories Wallet uses for a transfer leg, in the spellings the extractor emits. */
@@ -69,7 +69,11 @@ function counterpartHold(
   }
   const { pairs, possible } = crossTransfers([...mine, ...elsewhere]);
   const byRow = new Map<CsvRow, string>();
-  for (const p of [...pairs, ...possible]) {
+  // A real transfer claim on either leg is enough. A coincidence — neither leg
+  // claims anything, they merely share a figure — has to survive one more
+  // question, because there are a great many $300 movements in a month.
+  const answered = [...pairs, ...possible.filter((p) => couldBeTransfer(p.out, p.in))];
+  for (const p of answered) {
     for (const [leg, other] of [[p.out, p.in], [p.in, p.out]] as const) {
       const src = origin.get(leg);
       if (!src || other.account === account) continue;
@@ -77,6 +81,33 @@ function counterpartHold(
     }
   }
   return byRow;
+}
+
+/**
+ * Whether two rows of the same size in different accounts could be one
+ * movement, when neither of them says so.
+ *
+ * Two named counterparties that have nothing to do with each other are two
+ * movements. Platinum's `-$300.00 STARBUCKS` and Mercado Pago's `+$300.00
+ * Transferencia recibida Ferreteria Ceylan` fell on the same month and the same
+ * figure, and holding the Starbucks charge for a crossing that will never come
+ * keeps the month open for nothing.
+ *
+ * A genuine transfer reads differently from either side: one leg names the
+ * holder, or one names nothing at all, or both name the same institution. Only
+ * when none of those holds is the coincidence dismissed — the point is to
+ * dismiss coincidences, not to be clever about transfers.
+ */
+function couldBeTransfer(a: LedgerRow, b: LedgerRow): boolean {
+  const one = a.payee?.trim();
+  const two = b.payee?.trim();
+  if (!one || !two) return true;
+  const holder = statementHolder();
+  if (namesHolder(one, holder) || namesHolder(two, holder)) return true;
+  const words = (t: string): Set<string> =>
+    new Set(t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9]+/).filter((w) => w.length >= 4));
+  const shared = [...words(one)].some((w) => words(two).has(w));
+  return shared;
 }
 
 export function planWrites(
