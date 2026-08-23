@@ -154,7 +154,7 @@ test("a row with an unreadable date finds nothing instead of matching everything
 
 test("a month with nothing to reconcile diffs to an empty verdict", () => {
   const d = diff([], [], ACC);
-  assert.deepEqual(d, { missing: [], matched: 0, ambiguous: [], walletOnly: [] });
+  assert.deepEqual(d, { missing: [], matched: 0, ambiguous: [], walletOnly: [], grouped: [] });
 });
 
 // ── Closing the month and retiring the PDF ───────────────────────────────────
@@ -197,4 +197,58 @@ test("integrity blocking the write does NOT keep the PDF — preserved as it is"
   const blockedRun = { ...clean, blocked: true };
   assert.equal(mayMarkReconciled(blockedRun), false);
   assert.equal(mayRetireStatement(blockedRun), true);
+});
+
+// ── A movement the statement itemises and Wallet holds netted ─────────────
+
+test("a deposit and its fee are answered by the single net record Wallet holds", () => {
+  // DolarApp publishes `Compra USDc +3,600` and `Comisión -3`; Wallet holds the
+  // $3,597 that actually arrived. Row by row neither matches, so both were
+  // written on top of the record already there — $7,154 duplicated in June.
+  const rows: CsvRow[] = [
+    { date: "2026-06-22 12:00:00", account: "DolarApp", amount: "3600.00", category: "Others", note: "", payee: "TRUSTPOINT IT ST" },
+    { date: "2026-06-22 12:00:00", account: "DolarApp", amount: "-3.00", category: "Charges, Fees", note: "", payee: "Compra USDc comisión" },
+  ];
+  const net: WalletRecord = {
+    _id: "Record_net", accountId: "-Account_dolarapp", amount: 359700, type: 0,
+    recordDate: "2026-06-22T12:00:00.000-06:00", payee: "TRUSTPOINT IT ST",
+  } as WalletRecord;
+  const d = diff(rows, [net], "-Account_dolarapp");
+  assert.equal(d.missing.length, 0);
+  assert.equal(d.matched, 2);
+  assert.equal(d.walletOnly.length, 0);
+  assert.equal(d.grouped.length, 1);
+  assert.deepEqual(d.grouped[0].rows.map((r) => r.amount).sort(), ["-3.00", "3600.00"]);
+});
+
+test("two charges of the same sign are not grouped, however well they add up", () => {
+  // $182 and $18 over a $200 charge is the same family and is deliberately not
+  // covered: this pass runs over everything a statement holds, and same-sign
+  // sums are far likelier to be a coincidence than a netted fee.
+  const rows: CsvRow[] = [
+    { date: "2026-06-22 12:00:00", account: "Bancomer", amount: "-182.00", category: "Groceries", note: "", payee: "A" },
+    { date: "2026-06-22 12:00:00", account: "Bancomer", amount: "-18.00", category: "Groceries", note: "", payee: "B" },
+  ];
+  const rec: WalletRecord = {
+    _id: "Record_200", accountId: "-Account_bancomer", amount: 20000, type: 1,
+    recordDate: "2026-06-22T12:00:00.000-06:00",
+  } as WalletRecord;
+  const d = diff(rows, [rec], "-Account_bancomer");
+  assert.equal(d.grouped.length, 0);
+  assert.equal(d.missing.length, 2);
+});
+
+test("a pair too far from the record is not grouped", () => {
+  const rows: CsvRow[] = [
+    { date: "2026-06-01 12:00:00", account: "DolarApp", amount: "3600.00", category: "Others", note: "", payee: "X" },
+    { date: "2026-06-01 12:00:00", account: "DolarApp", amount: "-3.00", category: "Charges, Fees", note: "", payee: "Y" },
+  ];
+  const net: WalletRecord = {
+    _id: "Record_far", accountId: "-Account_dolarapp", amount: 359700, type: 0,
+    recordDate: "2026-06-22T12:00:00.000-06:00",
+  } as WalletRecord;
+  const d = diff(rows, [net], "-Account_dolarapp");
+  assert.equal(d.grouped.length, 0);
+  assert.equal(d.missing.length, 2);
+  assert.equal(d.walletOnly.length, 1);
 });

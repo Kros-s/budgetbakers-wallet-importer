@@ -240,7 +240,10 @@ async function reconcile(
   const d = diff(rows, existing, accountId);
 
   console.log(`\n✅ Ya en Wallet: ${d.matched}`);
-  console.log(`➕ Faltantes (se agregarían): ${d.missing.length}`);
+  // "Faltan en Wallet", not "se agregarían": what is written comes out of this
+  // list further down, after held legs, ignored instalments and rows the guard
+  // answers are removed. The old label promised a number no run produced.
+  console.log(`➕ Faltan en Wallet: ${d.missing.length}`);
   for (const r of d.missing) console.log(`   ${r.date.slice(0, 10)} $${r.amount} ${r.payee || ""} (${r.category})`);
   console.log(`⚠️ Ambiguos (revisar a mano): ${d.ambiguous.length}`);
   for (const a of d.ambiguous) console.log(`   ${a.row.date.slice(0, 10)} $${a.row.amount} ${a.row.payee || ""} — ${a.reason}`);
@@ -250,6 +253,16 @@ async function reconcile(
       `📅 ${edge.length} de los faltantes caen al filo del periodo — puede que el banco los refleje ` +
         `en el estado del mes vecino. No son anomalía; se resuelven al cruzar el mes.`
     );
+  }
+  if (d.grouped.length) {
+    console.log(
+      `🧮 ${d.grouped.length} movimiento(s) que el estado desglosa y Wallet tiene netos — ya registrados:`
+    );
+    for (const g of d.grouped) {
+      const net = ((g.record.amount / 100) * (g.record.type === 1 ? -1 : 1)).toFixed(2);
+      const parts = g.rows.map((r) => `$${r.amount} ${r.payee || ""}`.trim()).join(" + ");
+      console.log(`   ${g.record.recordDate.slice(0, 10)} $${net} en Wallet = ${parts}`);
+    }
   }
   console.log(`👀 Solo en Wallet (no aparecen en el estado): ${d.walletOnly.length}`);
   for (const w of d.walletOnly) console.log(`   ${w.recordDate.slice(0, 10)} $${(w.amount / 100) * (w.type === 1 ? -1 : 1)} ${w.payee ?? w.note ?? ""}`);

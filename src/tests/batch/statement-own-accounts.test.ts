@@ -134,3 +134,23 @@ test("the holder's own name is enough, with no bank named at all", () => {
     null
   );
 });
+
+test("a payee that names the institution is not a stranger who banks there", () => {
+  // Mercado Pago prints `Transferencia enviada UALA MARCO` for $6,000 going to
+  // the user's own Ualá account. One name in common with the holder is not
+  // enough to recognise him, and the payee is not empty — so the row was
+  // written as an ordinary expense.
+  assert.equal(
+    ownAccountFor("Transferencia enviada UALA MARCO", "Mercado pago", {
+      holder: HOLDER, payee: "Uala Marco",
+    }),
+    "Uala"
+  );
+  // A person who merely banks at BBVA still is not the account.
+  assert.equal(
+    ownAccountFor("SPEI BCO:012 BENEF:Marlene Miriam Vazquez Peña", "Banorte débito", {
+      holder: HOLDER, payee: "Marlene Miriam Vazquez Peña",
+    }),
+    null
+  );
+});

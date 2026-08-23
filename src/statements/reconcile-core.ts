@@ -49,6 +49,72 @@ export interface DiffResult {
   ambiguous: AmbiguousRow[];
   /** In Wallet (this account, this window), never mentioned by the statement. */
   walletOnly: WalletRecord[];
+  /**
+   * Rows the statement publishes separately that Wallet holds as one record —
+   * a deposit and the fee taken out of it, booked net.
+   */
+  grouped: { record: WalletRecord; rows: CsvRow[] }[];
+}
+
+/** Signed cents, the way the rest of the pipeline reads a row. */
+function signedCents(row: CsvRow): number {
+  const n = parseFloat(row.amount);
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+
+/** Both dates a statement may publish for one movement, as epoch ms. */
+function rowTimes(row: CsvRow): number[] {
+  const times = [Date.parse(row.date.replace(" ", "T"))];
+  if (row.opdate) times.push(Date.parse(`${row.opdate}T12:00:00`));
+  return times.filter(Number.isFinite);
+}
+
+/**
+ * A movement the statement itemises and Wallet holds netted.
+ *
+ * DolarApp publishes a deposit and the commission taken out of it as two lines
+ * — `Compra USDc +3,600` and `Comisión -3` — while Wallet holds the single
+ * $3,597 that actually arrived. Row by row neither matches anything, so both
+ * land in `missing`, and `--write` posts them on top of the record already
+ * there: $7,154 duplicated in June and $7,114 in July, on one account.
+ *
+ * Only the shape there is evidence for is claimed here: exactly two rows, of
+ * opposite sign, summing to the record, both within the matcher's slack of it.
+ * Two charges of the same sign summing to one record — $182 and $18 over a
+ * $200 charge — is the same family and is NOT covered: it is far likelier to
+ * be a coincidence, and this pass runs over everything the statement holds.
+ */
+function matchNettedPairs(
+  missing: CsvRow[],
+  free: WalletRecord[]
+): { record: WalletRecord; rows: CsvRow[] }[] {
+  const found: { record: WalletRecord; rows: CsvRow[] }[] = [];
+  const taken = new Set<CsvRow>();
+  for (const record of free) {
+    const want = record.type === 1 ? -record.amount : record.amount;
+    const at = Date.parse(record.recordDate);
+    if (!Number.isFinite(at)) continue;
+    const near = missing.filter(
+      (r) => !taken.has(r) &&
+        Number.isFinite(signedCents(r)) &&
+        rowTimes(r).some((t) => Math.abs(at - t) <= DATE_SLACK_DAYS * DAY_MS)
+    );
+    let pair: CsvRow[] | undefined;
+    for (let i = 0; i < near.length && !pair; i++) {
+      for (let j = i + 1; j < near.length && !pair; j++) {
+        const a = signedCents(near[i]);
+        const b = signedCents(near[j]);
+        // Opposite signs, and together exactly the record: a gross amount and
+        // the fee that came out of it.
+        if (a === 0 || b === 0 || (a > 0) === (b > 0)) continue;
+        if (a + b === want) pair = [near[i], near[j]];
+      }
+    }
+    if (!pair) continue;
+    pair.forEach((r) => taken.add(r));
+    found.push({ record, rows: pair });
+  }
+  return found;
 }
 
 /**
@@ -116,8 +182,17 @@ export function diff(rows: CsvRow[], existing: WalletRecord[], accountId: string
     }
   }
 
+  // Second pass, over what neither side could answer alone.
+  const free = inAccount.filter((r) => !usedRecordIds.has(r._id!));
+  const grouped = matchNettedPairs(missing, free);
+  for (const g of grouped) {
+    usedRecordIds.add(g.record._id!);
+    matched += g.rows.length;
+    for (const r of g.rows) missing.splice(missing.indexOf(r), 1);
+  }
+
   const walletOnly = inAccount.filter((r) => !usedRecordIds.has(r._id!));
-  return { missing, matched, ambiguous, walletOnly };
+  return { missing, matched, ambiguous, walletOnly, grouped };
 }
 
 /** Everything left over from a reconcile run that a human still has to touch. */

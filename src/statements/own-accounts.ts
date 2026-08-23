@@ -178,7 +178,7 @@ export function ownAccountFor(text: string, self: string, opts: OwnLookup | stri
   for (const entry of OWN_COUNTERPARTIES) {
     if (entry.covers.includes(self)) continue;
     if (!entry.match.test(text)) continue;
-    if (entry.requiresHolder && !isHolders(text, payee, holder)) continue;
+    if (entry.requiresHolder && !isHolders(text, payee, holder, entry)) continue;
     return entry.account;
   }
   // Nothing in the table matched, and it does not have to: if the party at the
@@ -202,11 +202,21 @@ export function ownAccountFor(text: string, self: string, opts: OwnLookup | stri
  * BBVA appears. And BBVA's own `SPEI RECIBIDO STP` names nobody at all, which
  * is not evidence of a third party and so is held rather than written.
  */
-function isHolders(text: string, payee: string | undefined, holder: string | undefined): boolean {
+function isHolders(
+  text: string,
+  payee: string | undefined,
+  holder: string | undefined,
+  entry: OwnCounterparty
+): boolean {
   if (namesHolder(`${text} ${payee ?? ""}`, holder)) return true;
   const named = payee?.trim();
   // Nobody named: unknown, and unknown waits.
   if (!named || RAIL_NAMES.test(named)) return true;
+  // The counterparty IS the institution, however the statement dressed it up.
+  // Mercado Pago prints `Transferencia enviada UALA MARCO` for money going to
+  // the user's own Ualá account: a payee naming Ualá is not a stranger who
+  // happens to bank there, and reading it as one wrote $6,000 as an expense.
+  if (entry.match.test(named)) return true;
   return false;
 }
 

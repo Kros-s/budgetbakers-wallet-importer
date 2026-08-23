@@ -169,17 +169,50 @@ export function planMonth(
     }
   }
 
+  // A movement the statement itemises and Wallet holds netted: DolarApp
+  // publishes `Compra USDc +3,600` and `Comisión -3` where Wallet holds the
+  // $3,597 that arrived. Row by row neither matches, so both would be written
+  // on top of the record already there. The same pass `diff()` runs on the
+  // per-statement path, and with the same restraint: exactly two rows, of
+  // opposite sign, summing to the record, near it in time.
+  const netted = new Set<(typeof outstanding)[number]>();
+  for (const w of wallet) {
+    if (usedWallet.has(w)) continue;
+    const near = outstanding.filter(
+      (o) => !netted.has(o) && o.account === w.account && dayGap(o.led.date, w.date) <= MATCH_SLACK_DAYS
+    );
+    let pair: typeof near | undefined;
+    for (let i = 0; i < near.length && !pair; i++) {
+      for (let j = i + 1; j < near.length && !pair; j++) {
+        const a = near[i].led.cents;
+        const b = near[j].led.cents;
+        if (a === 0 || b === 0 || (a > 0) === (b > 0)) continue;
+        if (a + b === w.cents) pair = [near[i], near[j]];
+      }
+    }
+    if (!pair) continue;
+    usedWallet.add(w);
+    for (const o of pair) {
+      netted.add(o);
+      planned.push({
+        account: o.account, row: o.row, disposition: "recorded",
+        reason: `Wallet lo tiene junto con su comisión, como $${(w.cents / 100).toFixed(2)}`,
+      });
+    }
+  }
+  const remaining = outstanding.filter((o) => !netted.has(o));
+
   // Pair the outstanding legs among themselves first: two statements of the same
   // month are the only place a transfer's two halves can meet.
-  const { pairs } = crossTransfers(outstanding.map((o) => o.led));
+  const { pairs } = crossTransfers(remaining.map((o) => o.led));
   const partner = new Map<LedgerRow, LedgerRow>();
   for (const p of pairs) {
     partner.set(p.out, p.in);
     partner.set(p.in, p.out);
   }
-  const byLed = new Map(outstanding.map((o) => [o.led, o]));
+  const byLed = new Map(remaining.map((o) => [o.led, o]));
 
-  for (const { account, row, led } of outstanding) {
+  for (const { account, row, led } of remaining) {
     const other = partner.get(led);
     if (other) {
       // Both legs are restated to the transfer category, and it matters: the
