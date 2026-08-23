@@ -38,7 +38,8 @@ import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../statements/period.js";
 import { chargesMismatch, parseDeclaredCharges } from "../statements/extraction.js";
-import { describeIgnored, splitForWriting } from "../statements/installments.js";
+import { describeIgnored } from "../statements/installments.js";
+import { describeHeld, planWrites } from "../statements/write-policy.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -111,7 +112,13 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- note SIEMPRE exactamente "[Claude reconcile ${args.month}]".\n` +
     `- payee: el nombre del comercio tal como aparece.\n` +
     `- Asigna la categoría más razonable del catálogo. Pagos RECIBIDOS a la tarjeta (abonos "SU PAGO", "PAGO RECIBIDO") usa "Transfer, withdraw".\n` +
-    `- NO incluyas: intereses resumidos sin movimiento, saldos, totales, ni líneas informativas.\n` +
+    `- INTERESES GANADOS: cada pago de intereses que el estado publique como movimiento es UN renglón, ` +
+    `con la fecha en que se pagó. NO los sumes ni los agregues en uno solo: si el banco publica 23 pagos ` +
+    `diarios, van 23 renglones. Categoría "Interests, dividends" (rendimientos que RECIBES).\n` +
+    `- No la confundas con "Loan, interests", que son intereses que PAGAS por un crédito, ni con ` +
+    `"Financial expenses" (comisiones).\n` +
+    `- NO incluyas: los totales de intereses del resumen (el renglón "Intereses brutos" o similar es la ` +
+    `SUMA de los pagos individuales, no un movimiento aparte), saldos, ni líneas informativas.\n` +
     `- Incluye comisiones y cargos del banco como movimientos ("Charges, Fees").\n` +
     `- COMPRAS A MESES: si el estado marca la parcialidad (Banamex escribe "004 de 006" en la línea del ` +
     `movimiento; Banorte "03/03" tras la descripción), copia ese marcador en la columna \`meses\` como ` +
@@ -246,7 +253,14 @@ async function reconcile(
   // extracted and still counted toward the arithmetic above — dropping them
   // earlier would make the extraction stop adding up against the statement's
   // own totals and trip the check that guards the write.
-  const { writable, ignored } = splitForWriting(d.missing);
+  // A transfer leg waits for the month's crossing to find its other half; a
+  // purchase or an interest payment exists on one statement only and nothing
+  // still in the post can duplicate it.
+  const { now: writable, held, ignored } = planWrites(d.missing);
+  if (held.length > 0) {
+    console.log(`⏸️ ${held.length} pata(s) de traspaso en espera del cruce del mes:`);
+    console.log(describeHeld(held).split("\n").map((l) => `   ${l}`).join("\n"));
+  }
   if (ignored.length > 0) {
     console.log(`🔁 ${ignored.length} parcialidad(es) de compras a meses, ignoradas a propósito:`);
     console.log(describeIgnored(ignored).split("\n").map((l) => `   ${l}`).join("\n"));
@@ -256,7 +270,10 @@ async function reconcile(
   }
 
   if (!args.write) {
-    console.log(`\nDry — nada escrito en Wallet. Repite con --write para agregar los ${writable.length} faltantes.`);
+    console.log(
+      `\nDry — nada escrito en Wallet. Con --write se agregarían ${writable.length}` +
+        (held.length ? `; ${held.length} espera(n) al cruce` : "") + `.`
+    );
     return;
   }
 
