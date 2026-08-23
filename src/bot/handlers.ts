@@ -68,6 +68,7 @@ import { DETECTION_PROMPT, looksLikeStatement, monthOf, parseDetection, resolveA
 import { fileStatement, formatArrivals, unidentifiedArrivals } from "../statements/filing.js";
 import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
 import { countBy, formatPlan, writableRows } from "../statements/apply.js";
+import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
 import { loadMonth } from "../statements/month-runner.js";
 import { listRecordsByDateRange } from "../records.js";
 import {
@@ -926,6 +927,97 @@ export function registerHandlers(deps: HandlerDeps): void {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const had = proposedIgnores.delete(ctx.chat!.id);
     await ctx.reply(had ? "🗑️ Regla descartada, nada cambió." : "No había ninguna propuesta.");
+  });
+
+  // The loop the pipeline was missing. Everything before this could extract and
+  // report; nothing settled a held transfer leg, so the only way to write a
+  // statement was the CLI by hand. Proposed, never applied: the plan is shown,
+  // and only a tap writes it.
+  const proposedApplies = new Map<number, { month: string }>();
+
+  bot.command("apply", async (ctx) => {
+    const arg = ctx.message.text.split(/\s+/)[1]?.trim() ?? "";
+    if (!/^\d{4}-\d{2}$/.test(arg)) {
+      await ctx.reply("Uso: `/apply 2026-07`", { parse_mode: "Markdown" });
+      return;
+    }
+    await ctx.reply(`🗂️ Revisando ${arg}…`);
+    const view = await loadMonth(arg, deps.couch, deps.lookup);
+    const rows = writableRows(view.plan).map((p) => ({ ...p.row, account: p.account }));
+    if (rows.length === 0) {
+      await sendSafeMessage(deps.bot.telegram, ctx.chat.id, `${formatPlan(view.plan)}\n\n_Nada por escribir._`);
+      return;
+    }
+    const guard = await guardWrite(rows, { lookup: deps.lookup, existing: view.records });
+    const report = formatGuardReport(guard);
+    if (guard.blocked) {
+      await sendSafeMessage(
+        deps.bot.telegram, ctx.chat.id,
+        `⛔ *${arg}* — la verificación de integridad levantó alerta(s), no propongo escribir.\n\n${report}`
+      );
+      return;
+    }
+    if (guard.records.length === 0) {
+      await sendSafeMessage(deps.bot.telegram, ctx.chat.id, `${arg}: nada quedó después del dedup.\n\n${report}`);
+      return;
+    }
+    proposedApplies.set(ctx.chat.id, { month: arg });
+    await deps.bot.telegram.sendMessage(
+      ctx.chat.id,
+      `${formatPlan(view.plan)}\n\n*${guard.records.length} registro(s) listos para escribir.*` +
+        (report.trim() ? `\n${report}` : ""),
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[
+            { text: `✍️ Escribir ${guard.records.length}`, callback_data: "confirm_apply" },
+            { text: "🗑️ Descartar", callback_data: "cancel_apply" },
+          ]],
+        },
+      }
+    );
+  });
+
+  bot.action("confirm_apply", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const proposed = proposedApplies.get(ctx.chat!.id);
+    if (!proposed) {
+      await ctx.reply("Ese plan ya no está vigente. Vuelve a correr /apply.");
+      return;
+    }
+    proposedApplies.delete(ctx.chat!.id);
+    await ctx.reply(`✍️ Escribiendo ${proposed.month}…`);
+
+    // Rebuilt, not remembered. Between the proposal and the tap the month may
+    // have changed — another statement arrived, or the batch wrote something —
+    // and writing a stale plan is how the same movement gets booked twice.
+    const view = await loadMonth(proposed.month, deps.couch, deps.lookup);
+    const rows = writableRows(view.plan).map((p) => ({ ...p.row, account: p.account }));
+    const guard = await guardWrite(rows, { lookup: deps.lookup, existing: view.records });
+    if (guard.blocked || guard.records.length === 0) {
+      await sendSafeMessage(
+        deps.bot.telegram, ctx.chat!.id,
+        `↩️ No escribí nada: ${guard.blocked ? "integridad levantó alerta(s)" : "ya no queda nada por escribir"}.\n\n${formatGuardReport(guard)}`
+      );
+      return;
+    }
+    await commitGuardedWrite(guard, {
+      lookup: deps.lookup, existing: view.records,
+      couch: deps.couch, userId: deps.userId,
+    });
+    await sendSafeMessage(
+      deps.bot.telegram, ctx.chat!.id,
+      `✅ *${proposed.month}* — ${guard.records.length} registro(s) escritos.\n\n` +
+        `_Para revertir: \`npm run snapshot -- undo ${proposed.month}\`_`
+    );
+  });
+
+  bot.action("cancel_apply", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const had = proposedApplies.delete(ctx.chat!.id);
+    await ctx.reply(had ? "🗑️ Descartado, nada se escribió." : "No había ningún plan pendiente.");
   });
 
   bot.command("plan", async (ctx) => {

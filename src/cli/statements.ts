@@ -15,6 +15,7 @@ import { statementStatus } from "../statements/registry.js";
 import { formatStatementsTable } from "../bot/statements-view.js";
 import { formatCoverage } from "../statements/ledgers.js";
 import { countBy, formatPlan, writableRows } from "../statements/apply.js";
+import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
 import { loadMonth } from "../statements/month-runner.js";
 import { formatArrivals, unidentifiedArrivals } from "../statements/filing.js";
 
@@ -34,7 +35,7 @@ async function main(): Promise<void> {
   }
 
   if (!/^\d{4}-\d{2}$/.test(arg ?? "")) {
-    throw new Error(`Uso: statements.ts <status|cross|plan> [YYYY-MM]`);
+    throw new Error(`Uso: statements.ts <status|cross|plan|apply> [YYYY-MM] [--write]`);
   }
 
   const credentials = loadDirectCredentials();
@@ -44,6 +45,32 @@ async function main(): Promise<void> {
 
   console.log(stripMarkdown(formatCoverage(view.coverage)));
   console.log(`Ventana consultada en Wallet: ${view.window.from.slice(0, 10)} → ${view.window.to.slice(0, 10)}\n`);
+
+  if (cmd === "apply") {
+    const rows = writableRows(view.plan).map((p) => ({ ...p.row, account: p.account }));
+    if (rows.length === 0) {
+      console.log(stripMarkdown(formatPlan(view.plan)));
+      console.log("\nNada por escribir.");
+      return;
+    }
+    // Through the same guard the per-statement path uses: dedup against what
+    // Wallet holds and an integrity pass over what is about to be posted.
+    const guard = await guardWrite(rows, { lookup, existing: view.records });
+    console.log(formatGuardReport(guard));
+    if (guard.blocked) {
+      console.error("\n⛔ Integridad levantó alerta(s): no se escribe nada.");
+      process.exitCode = 1;
+      return;
+    }
+    if (!process.argv.includes("--write")) {
+      console.log(`\n${guard.records.length} registro(s) listos. Repite con --write para escribirlos.`);
+      return;
+    }
+    await commitGuardedWrite(guard, { lookup, existing: view.records, couch, userId: credentials.userId });
+    console.log(`\n✍️ Escritos ${guard.records.length} registro(s).`);
+    console.log(`Para revertir: npm run snapshot -- undo ${arg}`);
+    return;
+  }
 
   if (cmd === "cross" || cmd === "plan") {
     console.log(stripMarkdown(formatPlan(view.plan)));

@@ -34,6 +34,9 @@ import { CATALOG_PROMPT } from "../webhook/email-processor.js";
 import { markReceived } from "../statements/registry.js";
 import { retireStatement } from "../statements/inbox.js";
 import { bankProfileFileName } from "../statements/naming.js";
+import {
+  DATE_SLACK_DAYS, diff, mayMarkReconciled, unresolvedCount,
+} from "../statements/reconcile-core.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
 import { ledgerPath as ledgerPathFor } from "../statements/ledgers.js";
 import { loadRegistry } from "../statements/registry.js";
@@ -47,18 +50,6 @@ import { toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
-/**
- * How far a statement row and a Wallet record may sit apart and still be the
- * same movement.
- *
- * Five, not three, and for the same reason as period.ts's BOUNDARY_DAYS: the
- * measured operation-to-posting lag reaches five days at Banamex. At three, a
- * purchase already recorded from its alert under the operation date failed to
- * match the statement's posting date, landed in `missing`, and --write booked
- * it again. The boundary heuristic was already flagging exactly those rows as
- * edge cases while the matcher refused to reach them.
- */
-const DATE_SLACK_DAYS = 5;
 
 interface Args {
   pdf: string;
@@ -158,52 +149,6 @@ function buildExtractionPrompt(args: Args, profile: string): string {
   );
 }
 
-interface DiffResult {
-  missing: CsvRow[];        // in statement, not in Wallet → candidates to write
-  matched: number;
-  ambiguous: { row: CsvRow; reason: string }[];
-  walletOnly: WalletRecord[]; // in Wallet (this account/month), not in statement
-}
-
-function diff(rows: CsvRow[], existing: WalletRecord[], accountId: string): DiffResult {
-  const inAccount = existing.filter((r) => r.accountId === accountId);
-  const usedRecordIds = new Set<string>();
-  const missing: CsvRow[] = [];
-  const ambiguous: { row: CsvRow; reason: string }[] = [];
-  let matched = 0;
-
-  for (const row of rows) {
-    const amt = Math.round(Math.abs(parseFloat(row.amount)) * 100);
-    const type = parseFloat(row.amount) < 0 ? 1 : 0;
-    // Either date may be the one Wallet holds: an alert fires when the purchase
-    // happens, the statement books it when it posts, and for an instalment the
-    // two are a month apart. Matching on the closest of the two is what keeps a
-    // movement from reading as missing and being written a second time.
-    const times = [Date.parse(row.date.replace(" ", "T"))];
-    if (row.opdate) times.push(Date.parse(`${row.opdate}T12:00:00`));
-    const candidates = inAccount.filter((r) => {
-      if (r.amount !== amt || r.type !== type) return false;
-      const rec = Date.parse(r.recordDate);
-      return times.some((t) => Number.isFinite(t) && Math.abs(rec - t) <= DATE_SLACK_DAYS * 86_400_000);
-    });
-    const free = candidates.filter((c) => !usedRecordIds.has(c._id!));
-    if (free.length === 1) {
-      usedRecordIds.add(free[0]._id!);
-      matched++;
-    } else if (free.length > 1) {
-      usedRecordIds.add(free[0]._id!);
-      matched++;
-      ambiguous.push({ row, reason: `${free.length} registros candidatos con mismo monto/fecha — revisar duplicados en Wallet` });
-    } else if (candidates.length > 0) {
-      ambiguous.push({ row, reason: "el registro de Wallet que coincide ya casó con otra línea del estado — posible cargo repetido" });
-    } else {
-      missing.push(row);
-    }
-  }
-
-  const walletOnly = inAccount.filter((r) => !usedRecordIds.has(r._id!));
-  return { missing, matched, ambiguous, walletOnly };
-}
 
 /**
  * Everything after the rows exist: compare against Wallet, report, and — only
@@ -344,8 +289,8 @@ async function reconcile(
   // Anything unresolved leaves the month open. Marking it on `held` alone let
   // ambiguous rows and rows the converter refused vanish into a month the
   // registry then never chased again.
-  const unresolved = held.length + d.ambiguous.length + skippedRows;
-  if (unresolved === 0 && !blocked) {
+  const outstanding = { held: held.length, ambiguous: d.ambiguous.length, skipped: skippedRows, blocked };
+  if (mayMarkReconciled(outstanding)) {
     markReceived(args.account, args.month);
   } else {
     console.log(
@@ -363,7 +308,10 @@ async function reconcile(
   // month is crossed. Before the write-policy refactor a held transfer leg
   // arrived here as a `skipped` row and kept the PDF by accident; now it does
   // not reach convertRows at all, so it has to be counted explicitly.
-  const retired = retireStatement(args.pdf, d.ambiguous.length + skippedRows + held.length);
+  // A blocked run counts as unresolved too: it wrote nothing and left the month
+  // open, and the PDF is exactly what you need to run it again. Without this it
+  // was thrown away on the one outcome that guarantees you will come back to it.
+  const retired = retireStatement(args.pdf, unresolvedCount(outstanding) + (blocked ? 1 : 0));
   console.log(retired.removed ? `🗑️ PDF retirado: ${retired.reason}.` : `📎 PDF conservado: ${retired.reason}.`);
 
   const bot = new Telegraf(config.telegramBotToken);

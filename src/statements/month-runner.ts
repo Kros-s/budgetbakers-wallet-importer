@@ -9,7 +9,7 @@
 
 import type { AxiosInstance } from "axios";
 import { listRecordsByDateRange } from "../records.js";
-import type { LookupMaps } from "../types.js";
+import type { LookupMaps, WalletRecord } from "../types.js";
 import { planMonth, type MonthPlan } from "./apply.js";
 import { toWalletRows } from "./crossing.js";
 import { loadLedger, monthCoverage, type Coverage } from "./ledgers.js";
@@ -23,6 +23,8 @@ export interface MonthView {
   window: { from: string; to: string };
   /** Which period each account contributed, and where that period came from. */
   periods: MonthWindow;
+  /** The Wallet records the window returned, so a caller can write without re-fetching. */
+  records: WalletRecord[];
 }
 
 export async function loadMonth(
@@ -60,5 +62,6 @@ export async function loadMonth(
     plan: planMonth(month, ledgers, wallet, { coverageComplete: coverage.complete }),
     window: { from, to },
     periods,
+    records,
   };
 }

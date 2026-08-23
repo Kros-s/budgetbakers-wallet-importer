@@ -24,6 +24,7 @@ export const BOT_COMMANDS: BotCommandSpec[] = [
   { command: "statements", description: "Estados de cuenta: qué mes falta por cuenta" },
   { command: "cross", description: "Cruzar un mes completo (/cross 2026-07)" },
   { command: "plan", description: "Qué se escribiría de un mes (/plan 2026-07)" },
+  { command: "apply", description: "Escribir un mes, con confirmación (/apply 2026-07)" },
   { command: "help", description: "Cómo usar el bot" },
 ];
 
@@ -74,4 +75,7 @@ export const HELP_TEXT = [
   "Un traspaso cuya otra pata está en un estado que no ha llegado se vería suelto, y escribirlo así lo duplica.",
   "`/cross 2026-07` — con el mes completo, cruza todas las cuentas: parea los traspasos entre ellas y te muestra el panorama.",
   "`/plan 2026-07` — qué se escribiría y qué se queda esperando, con el motivo de cada uno. No escribe nada.",
+  "`/apply 2026-07` — lo mismo, pero con botón para escribirlo. Al confirmar rehago el plan desde cero:",
+  "entre la propuesta y el toque puede haber llegado otro estado, y escribir un plan viejo duplica.",
+  "Si algo sale mal: `npm run snapshot -- undo 2026-07` quita exactamente lo que esa corrida agregó.",
 ].join("\n");
