@@ -78,6 +78,8 @@ export function pruneDownloads(now?: number): PruneResult {
  * downloaded, and then abandoned would otherwise sit there forever.
  */
 export function pruneStatementInbox(now?: number): PruneResult {
+  // Only PDFs are swept. arrivals.jsonl lives beside them and is the record of
+  // what was ever received — it outlives the files it describes on purpose.
   return pruneOldFiles({
     dir: INBOX_DIR,
     pattern: /\.pdf$/i,

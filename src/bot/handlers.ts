@@ -65,7 +65,7 @@ import { parseVerdict } from "../webhook/verdict.js";
 import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
 import { formatStatementsTable } from "./statements-view.js";
 import { DETECTION_PROMPT, looksLikeStatement, monthOf, parseDetection, resolveAccount } from "../statements/detect.js";
-import { INBOX_DIR } from "../statements/inbox.js";
+import { fileStatement, formatArrivals, unidentifiedArrivals } from "../statements/filing.js";
 import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
 import { listRecordsByDateRange } from "../records.js";
 import {
@@ -859,9 +859,14 @@ export function registerHandlers(deps: HandlerDeps): void {
       return true;
     }
 
-    fs.mkdirSync(INBOX_DIR, { recursive: true });
-    const filed = path.join(INBOX_DIR, `${account.toLowerCase().replace(/\s+/g, "-")}-${month}.pdf`);
-    fs.copyFileSync(localPath, filed);
+    const landed = fileStatement({
+      bytes: fs.readFileSync(localPath),
+      original: path.basename(localPath),
+      source: "telegram",
+      account, month,
+      via: `chat:${chatId}`,
+    });
+    const filed = landed.path;
 
     const ahead = statementQueue.pending;
     await sendSafeMessage(
@@ -1016,11 +1021,12 @@ export function registerHandlers(deps: HandlerDeps): void {
   });
 
   bot.command("statements", async (ctx) => {
-    await sendSafeMessage(
-      deps.bot.telegram,
-      ctx.chat.id,
-      formatStatementsTable(statementStatus())
-    );
+    const pendientes = unidentifiedArrivals();
+    const extra = pendientes.length
+      ? `\n\n📥 *${pendientes.length} archivo(s) sin identificar* — llegaron pero no sé de qué cuenta son:\n` +
+        `\`\`\`\n${formatArrivals(pendientes)}\n\`\`\`\n_Dime a qué cuenta corresponden y los proceso._`
+      : "";
+    await sendSafeMessage(deps.bot.telegram, ctx.chat.id, formatStatementsTable(statementStatus()) + extra);
   });
 
   bot.command("help", async (ctx) => {

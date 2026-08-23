@@ -1,5 +1,6 @@
 import type { MessageEnvelopeObject } from "imapflow";
 import PostalMime from "postal-mime";
+import { fileStatement } from "../statements/filing.js";
 
 import { processEmail } from "../webhook/email-processor.js";
 import type { EmailDeps } from "../webhook/email-processor.js";
@@ -111,6 +112,31 @@ export async function pollOnce(
     try {
       const parsed = await PostalMime.parse(msg.source);
       const text = bodyToText(parsed.text, parsed.html);
+
+      // A bank that emails its statement is handing over the complete record of
+      // a month. It used to be parsed for its body text and the attachment
+      // dropped, so the one document worth keeping was the one thing thrown
+      // away. It is filed unidentified — which account and month it belongs to
+      // is a question for the reconciler, not the poller — and the arrival is
+      // written down either way.
+      for (const att of parsed.attachments ?? []) {
+        const name = att.filename ?? "adjunto.pdf";
+        const isPdf = /pdf/i.test(att.mimeType ?? "") || /\.pdf$/i.test(name);
+        if (!isPdf) continue;
+        try {
+          const landed = fileStatement({
+            bytes: Buffer.from(att.content as ArrayBuffer),
+            original: name,
+            source: "email",
+            via: msg.envelope.from?.[0]?.address ?? "",
+          });
+          console.log(
+            `[imap] uid=${msg.uid} adjunto ${landed.duplicate ? "ya archivado" : "archivado"}: ${landed.name}`
+          );
+        } catch (err) {
+          console.error(`[imap] uid=${msg.uid} no pude archivar "${name}":`, err instanceof Error ? err.message : err);
+        }
+      }
 
       if (!text) {
         console.log(`[imap] uid=${msg.uid} — empty body, skipping`);

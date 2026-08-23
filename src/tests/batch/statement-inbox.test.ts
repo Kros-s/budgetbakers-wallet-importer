@@ -133,3 +133,16 @@ test("downloads are swept sooner than the statement shelf", () => {
   // Nothing in downloads was deliberately kept; the inbox is a decision.
   assert.ok(DOWNLOAD_RETENTION_DAYS < STATEMENT_RETENTION_DAYS);
 });
+
+test("the arrivals record outlives the statements it describes", () => {
+  // The whole point of the log is that it survives the retention sweep: the
+  // PDF is disposable, the fact that it arrived is not.
+  const pdf = put("viejo-2026-01.pdf", 200);
+  fs.writeFileSync(path.join(INBOX_DIR, "arrivals.jsonl"), '{"filed":"viejo-2026-01.pdf"}\n');
+  const log = path.join(INBOX_DIR, "arrivals.jsonl");
+  const when = new Date(Date.now() - 200 * DAY);
+  fs.utimesSync(log, when, when);
+  pruneStatementInbox();
+  assert.equal(fs.existsSync(pdf), false);
+  assert.equal(fs.existsSync(log), true);
+});
