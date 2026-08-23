@@ -33,8 +33,15 @@
  * Two rows form a transfer pair when ALL of:
  *   1. Both have the same category that maps to the "Transfer, withdraw" id
  *   2. Both share the exact same `date` string
+ *   3. Both carry the same unsigned amount
+ *   4. Their signs are opposite — one leaves an account, one arrives
+ *   5. Their accounts differ
  * The pair is linked via a shared `transferId` UUID, with each leg pointing
- * to the other's account in `transferAccountId`.
+ * to the other's account in `transferAccountId`. A row that satisfies 1 but
+ * finds no counterpart satisfying the rest is skipped, not linked to whatever
+ * else shares its date. That includes a cross-currency transfer, whose two
+ * legs never carry the same figure: it has to be paired by hand, which beats
+ * inventing a pair out of two amounts that have nothing to do with each other.
  */
 
 import { parse } from "csv-parse/sync";
@@ -294,6 +301,111 @@ export function skippedRowsToCsv(skipped: SkippedRow[]): string {
   return stringify(data, { header: true, columns });
 }
 
+/** A transfer leg waiting to be paired, with everything the pairing needs. */
+interface TransferLeg {
+  /** Index into the `records` array being built. */
+  index: number;
+  /** The row's `date` column, trimmed. Legs only pair within the same date. */
+  dateKey: string;
+  /** Unsigned cents, exactly as the record stores it. */
+  amount: number;
+  /** RECORD_TYPE.EXPENSE (1) = money out, RECORD_TYPE.INCOME (0) = money in. */
+  type: 0 | 1;
+  accountId: string;
+  /** The account as the CSV named it, for the skip reason. */
+  accountName: string;
+}
+
+/** A leg that found no counterpart, and why. */
+interface UnpairedLeg {
+  index: number;
+  reason: string;
+}
+
+/** Explains, in the row's own terms, why this leg was left over. */
+function unpairedReason(leg: TransferLeg, bucket: TransferLeg[]): string {
+  const amount = (leg.amount / 100).toFixed(2);
+  const opposite = bucket.filter((l) => l.type !== leg.type);
+
+  if (opposite.length > 0 && opposite.every((l) => l.accountId === leg.accountId)) {
+    return `Transfer row at "${leg.dateKey}" for ${amount} finds its only counterpart on the same account `
+      + `"${leg.accountName}" — a transfer moves money between two different accounts`;
+  }
+
+  const direction = leg.type === RECORD_TYPE.EXPENSE ? "outgoing" : "incoming";
+  return `Transfer row at "${leg.dateKey}" for ${amount} (${direction}) has no matching leg — a pair needs `
+    + `the same date, the same amount, opposite signs and two different accounts`;
+}
+
+/**
+ * Links transfer legs in pairs and hands back the ones left over.
+ *
+ * The date string alone used to be the entire rule, which is why this function
+ * exists. The statement-extraction prompt writes `12:00:00` whenever a
+ * statement publishes no time, so every transfer on a given day carries the
+ * identical date string: the second transfer row of the day was linked to the
+ * first, whatever it was. Two unrelated transfers on one date came out sharing
+ * a `transferId`, each pointing at the other's account and both possibly the
+ * same sign — the shape of the $323,000 CETES withdrawal booked as an expense
+ * that `batch/integrity.ts` was written to catch after the fact.
+ *
+ * Nothing here widens the same-date requirement; it only adds the three checks
+ * that make "same date" mean one movement instead of one day.
+ */
+function linkTransferPairs(records: NewRecord[], legs: TransferLeg[]): UnpairedLeg[] {
+  // Same date + same unsigned amount is the only bucket in which two legs may
+  // meet. Buckets and their contents stay in CSV order, which is what makes the
+  // choice below deterministic: interleaved rows (A-out, B-out, A-in, B-in)
+  // fall into separate buckets by amount, and inside a bucket the earliest
+  // usable counterpart always wins, so the same CSV always pairs the same way.
+  const buckets = new Map<string, TransferLeg[]>();
+  for (const leg of legs) {
+    const key = `${leg.dateKey}|${leg.amount}`;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(leg);
+    else buckets.set(key, [leg]);
+  }
+
+  const paired = new Set<number>();
+  for (const bucket of buckets.values()) {
+    const ins = bucket.filter((l) => l.type === RECORD_TYPE.INCOME);
+
+    for (const out of bucket) {
+      if (out.type !== RECORD_TYPE.EXPENSE) continue;
+
+      // `paired` is what keeps a leg from being consumed twice: with three legs
+      // of one amount the third has no partner left and must stay unpaired,
+      // rather than reusing a leg that already belongs to a finished pair.
+      // The account check refuses an equal-sized in and out on the SAME
+      // account — that is two unrelated movements, not a transfer.
+      const partner = ins.find((l) => !paired.has(l.index) && l.accountId !== out.accountId);
+      if (!partner) continue;
+
+      paired.add(out.index);
+      paired.add(partner.index);
+
+      const sharedTransferId = crypto.randomUUID();
+      const outRecord = records[out.index];
+      const inRecord = records[partner.index];
+
+      outRecord.transferId = sharedTransferId;
+      outRecord.transferAccountId = inRecord.accountId;
+      inRecord.transferId = sharedTransferId;
+      inRecord.transferAccountId = outRecord.accountId;
+    }
+  }
+
+  const unpaired: UnpairedLeg[] = [];
+  for (const bucket of buckets.values()) {
+    for (const leg of bucket) {
+      if (paired.has(leg.index)) continue;
+      unpaired.push({ index: leg.index, reason: unpairedReason(leg, bucket) });
+    }
+  }
+
+  return unpaired.sort((a, b) => a.index - b.index);
+}
+
 /**
  * Converts parsed CSV rows to `NewRecord` objects using runtime lookup maps.
  *
@@ -306,10 +418,11 @@ export function skippedRowsToCsv(skipped: SkippedRow[]): string {
  * - `transfer`    — true when categoryId === maps.transferCategoryId
  *
  * Transfer pair linking:
- * - Pairs identified by: same category (transfer) + same date string
- * - Using both conditions is more robust than timestamp alone
+ * - Pairs identified by: same category (transfer) + same date string + same
+ *   unsigned amount + opposite signs + two different accounts
  * - Each pair gets a shared `transferId` UUID; each leg gets the other's
  *   accountId in `transferAccountId`
+ * - Every leg that finds no such counterpart goes to `skipped`
  *
  * The returned `originalRows` array is parallel to `records` — index i in
  * `originalRows` is the source CSV row for `records[i]`. This allows cli.ts
@@ -320,8 +433,10 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
   const originalRows: CsvRow[] = [];
   const skipped: SkippedRow[] = [];
 
-  // Track pending transfer legs. Key: date string. Value: index into `records`.
-  const pendingTransfers = new Map<string, number>();
+  // Transfer legs are collected here and paired once every row is converted:
+  // a leg's counterpart may be any later row, and the pairing needs the amount,
+  // the direction and the account of both sides before it can decide anything.
+  const transferLegs: TransferLeg[] = [];
 
   for (const row of rows) {
     if (!row.date?.trim() || !row.account?.trim()) continue;
@@ -429,40 +544,31 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
 
     // ── Transfer pair linking ───────────────────────────────────────────────
     if (isTransfer) {
-      const pairKey = row.date.trim();
-      const pairIdx = pendingTransfers.get(pairKey);
-
-      if (pairIdx !== undefined) {
-        const sharedTransferId = crypto.randomUUID();
-        const firstLeg = records[pairIdx];
-
-        firstLeg.transferId = sharedTransferId;
-        firstLeg.transferAccountId = accountId;
-
-        record.transferId = sharedTransferId;
-        record.transferAccountId = firstLeg.accountId;
-
-        pendingTransfers.delete(pairKey);
-      } else {
-        pendingTransfers.set(pairKey, records.length);
-      }
+      transferLegs.push({
+        index: records.length,
+        dateKey: row.date.trim(),
+        amount,
+        type,
+        accountId,
+        accountName: row.account.trim(),
+      });
     }
 
     records.push(record);
     originalRows.push(row);
   }
 
-  // Move any unmatched transfer legs to skipped.
-  // Iterate in reverse so splicing doesn't shift subsequent indices.
-  const orphanIndices = [...pendingTransfers.values()].sort((a, b) => b - a);
-  for (const idx of orphanIndices) {
-    const orphanRow = originalRows[idx];
-    skipped.push({
-      row: orphanRow,
-      reason: `Transfer row at "${orphanRow.date}" has no matching pair — both legs must have the same date`,
-    });
-    records.splice(idx, 1);
-    originalRows.splice(idx, 1);
+  // Move any leg that found no counterpart to skipped. Half a transfer written
+  // on its own is the orphan leg `statements/crossing.ts` goes hunting for, and
+  // a leg linked to the wrong partner is worse still, so neither is written.
+  const unpairedLegs = linkTransferPairs(records, transferLegs);
+  for (const { index, reason } of unpairedLegs) {
+    skipped.push({ row: originalRows[index], reason });
+  }
+  // Splice in reverse so removing one leg doesn't shift the index of the next.
+  for (const { index } of [...unpairedLegs].reverse()) {
+    records.splice(index, 1);
+    originalRows.splice(index, 1);
   }
 
   return { records, originalRows, skipped };
