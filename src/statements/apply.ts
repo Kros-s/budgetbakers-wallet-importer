@@ -14,6 +14,7 @@
 
 import type { CsvRow } from "../csv.js";
 import { TRANSFER_CATEGORY, crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
+import { CASH_ACCOUNT, expandCashWithdrawals } from "./cash.js";
 import { splitForWriting } from "./installments.js";
 import { uniqueGroupSummingTo } from "./reconcile-core.js";
 import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
@@ -146,7 +147,21 @@ export function planMonth(
   for (const led of ledgers) {
     const { writable, ignored: skip } = splitForWriting(led.rows);
     for (const row of skip) ignored.push({ account: led.account, row });
-    usable.push({ account: led.account, rows: writable });
+    // Cash withdrawals become their two legs here, before anything is crossed.
+    // BBVA categorises `RETIRO SIN TARJETA QR` as a transfer, so left whole it
+    // was held for a counterpart no statement will ever bring — the cash
+    // account issues none. Expanded, the counterpart is the leg beside it and
+    // the crossing pairs them like any other transfer.
+    //
+    // The mirror leg is the one row in a ledger that does NOT belong to the
+    // account the ledger is for, so it carries its account explicitly. Reading
+    // it off `row.account` for every row instead would hand the extractor's
+    // spelling authority over the ledger's, which is not a trade worth making
+    // for one row in a hundred.
+    for (const row of expandCashWithdrawals(writable)) {
+      const isMirror = row.account === CASH_ACCOUNT && led.account !== CASH_ACCOUNT;
+      usable.push({ account: isMirror ? CASH_ACCOUNT : led.account, rows: [row] });
+    }
   }
 
   // Rows still owed after Wallet has been consulted — only these can pair, and

@@ -259,3 +259,19 @@ test("the spec accepts a month or a range and refuses anything else", () => {
     assert.equal(MONTH_SPEC.test(bad), false, bad);
   }
 });
+
+test("a cash withdrawal is paired in the month's plan, not held forever", () => {
+  // BBVA categorises `RETIRO SIN TARJETA QR` as a transfer, so left whole the
+  // month's plan held it for a counterpart no statement will ever bring — the
+  // cash account issues none.
+  const withdrawal: CsvRow = {
+    date: "2026-06-09 12:00:00", account: "Bancomer", amount: "-2400.00",
+    category: "Transfer, withdraw", note: "[Claude reconcile 2026-06]",
+    payee: "Retiro sin tarjeta QR", efectivo: "1",
+  };
+  const plan = planMonth("2026-06", [{ account: "Bancomer", rows: [withdrawal] }], []);
+  const paired = plan.planned.filter((p) => p.disposition === "pair");
+  assert.equal(paired.length, 2);
+  assert.deepEqual(paired.map((p) => p.account).sort(), ["Bancomer", "Wallet"]);
+  assert.equal(plan.planned.filter((p) => p.disposition === "hold").length, 0);
+});
