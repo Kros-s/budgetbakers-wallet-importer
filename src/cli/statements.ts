@@ -1,0 +1,67 @@
+/**
+ * Statement pipeline, from a terminal session.
+ *
+ *   npx tsx src/cli/statements.ts status
+ *   npx tsx src/cli/statements.ts cross 2026-07
+ *   npx tsx src/cli/statements.ts plan 2026-07
+ *
+ * The same functions the Telegram commands call. Two surfaces, one answer —
+ * a month must not mean one thing in chat and another in a terminal.
+ */
+import { loadEnvLocal } from "../env.js";
+import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
+import { loadDirectCredentials } from "../direct-auth.js";
+import { statementStatus } from "../statements/registry.js";
+import { formatStatementsTable } from "../bot/statements-view.js";
+import { formatCoverage } from "../statements/ledgers.js";
+import { countBy, formatPlan, writableRows } from "../statements/apply.js";
+import { loadMonth } from "../statements/month-runner.js";
+import { formatArrivals, unidentifiedArrivals } from "../statements/filing.js";
+
+function stripMarkdown(text: string): string {
+  return text.replace(/```/g, "").replace(/[*_]/g, "");
+}
+
+async function main(): Promise<void> {
+  loadEnvLocal();
+  const [cmd, arg] = process.argv.slice(2);
+
+  if (!cmd || cmd === "status") {
+    console.log(stripMarkdown(formatStatementsTable(statementStatus())));
+    const pend = unidentifiedArrivals();
+    if (pend.length) console.log(`\n${pend.length} sin identificar:\n${formatArrivals(pend)}`);
+    return;
+  }
+
+  if (!/^\d{4}-\d{2}$/.test(arg ?? "")) {
+    throw new Error(`Uso: statements.ts <status|cross|plan> [YYYY-MM]`);
+  }
+
+  const credentials = loadDirectCredentials();
+  const couch = buildCouchClient(credentials.replication);
+  const lookup = buildLookupMapsFromData(await fetchLookupData(couch));
+  const view = await loadMonth(arg, couch, lookup);
+
+  console.log(stripMarkdown(formatCoverage(view.coverage)));
+  console.log(`Ventana consultada en Wallet: ${view.window.from.slice(0, 10)} → ${view.window.to.slice(0, 10)}\n`);
+
+  if (cmd === "cross" || cmd === "plan") {
+    console.log(stripMarkdown(formatPlan(view.plan)));
+    if (cmd === "plan") {
+      const n = countBy(view.plan);
+      console.log(`\nDetalle de lo que se escribiría (${writableRows(view.plan).length}):`);
+      for (const p of writableRows(view.plan)) {
+        console.log(`   ${p.row.date.slice(0, 10)} ${p.account.padEnd(20)} $${String(p.row.amount).padStart(12)}  ${p.disposition} — ${p.reason}`);
+      }
+      if (n.hold) console.log(`\n${n.hold} en espera; no se escriben.`);
+      console.log(`\nNada se ha escrito. La escritura sigue siendo una decisión aparte.`);
+    }
+    return;
+  }
+  throw new Error(`Comando desconocido: ${cmd}`);
+}
+
+main().catch((err) => {
+  console.error("\nError:", err instanceof Error ? err.message : err);
+  process.exit(1);
+});

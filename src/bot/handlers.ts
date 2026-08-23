@@ -67,6 +67,8 @@ import { formatStatementsTable } from "./statements-view.js";
 import { DETECTION_PROMPT, looksLikeStatement, monthOf, parseDetection, resolveAccount } from "../statements/detect.js";
 import { fileStatement, formatArrivals, unidentifiedArrivals } from "../statements/filing.js";
 import { formatCoverage, loadLedger, monthCoverage } from "../statements/ledgers.js";
+import { countBy, formatPlan, writableRows } from "../statements/apply.js";
+import { loadMonth } from "../statements/month-runner.js";
 import { listRecordsByDateRange } from "../records.js";
 import {
   alreadyInWallet, crossTransfers, deferNearBoundary, formatCrossing, orphanTransferLegs,
@@ -915,6 +917,30 @@ export function registerHandlers(deps: HandlerDeps): void {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const had = proposedIgnores.delete(ctx.chat!.id);
     await ctx.reply(had ? "🗑️ Regla descartada, nada cambió." : "No había ninguna propuesta.");
+  });
+
+  bot.command("plan", async (ctx) => {
+    const arg = ctx.message.text.split(/\s+/)[1]?.trim() ?? "";
+    if (!/^\d{4}-\d{2}$/.test(arg)) {
+      await ctx.reply("Uso: `/plan 2026-07`", { parse_mode: "Markdown" });
+      return;
+    }
+    await ctx.reply(`🗂️ Armando el plan de ${arg}…`);
+    // Same call the terminal makes. A month must not mean one thing in chat and
+    // another in a session, so both ask loadMonth and neither decides.
+    const view = await loadMonth(arg, deps.couch, deps.lookup);
+    const n = countBy(view.plan);
+    const detail = writableRows(view.plan)
+      .slice(0, 12)
+      .map((p) => `${p.row.date.slice(0, 10)} ${p.account} $${p.row.amount} — ${p.disposition}`)
+      .join("\n");
+    const more = writableRows(view.plan).length > 12 ? `\n_…y ${writableRows(view.plan).length - 12} más._` : "";
+    await sendSafeMessage(
+      deps.bot.telegram, ctx.chat.id,
+      `${formatPlan(view.plan)}\n\n_${formatCoverage(view.coverage)}_` +
+        (detail ? `\n\n*Se escribiría:*\n\`\`\`\n${detail}\n\`\`\`${more}` : "") +
+        `\n\n_Nada escrito. ${n.hold ? `${n.hold} en espera.` : ""}_`
+    );
   });
 
   bot.command("cross", async (ctx) => {

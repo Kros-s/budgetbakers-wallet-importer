@@ -23,6 +23,7 @@ export const BOT_COMMANDS: BotCommandSpec[] = [
   { command: "ignore", description: "Ignorar correos por asunto (/ignore texto)" },
   { command: "statements", description: "Estados de cuenta: qué mes falta por cuenta" },
   { command: "cross", description: "Cruzar un mes completo (/cross 2026-07)" },
+  { command: "plan", description: "Qué se escribiría de un mes (/plan 2026-07)" },
   { command: "help", description: "Cómo usar el bot" },
 ];
 
@@ -72,4 +73,5 @@ export const HELP_TEXT = [
   "No escribo cuenta por cuenta: guardo cada extracción y espero a tener el mes completo.",
   "Un traspaso cuya otra pata está en un estado que no ha llegado se vería suelto, y escribirlo así lo duplica.",
   "`/cross 2026-07` — con el mes completo, cruza todas las cuentas: parea los traspasos entre ellas y te muestra el panorama.",
+  "`/plan 2026-07` — qué se escribiría y qué se queda esperando, con el motivo de cada uno. No escribe nada.",
 ].join("\n");

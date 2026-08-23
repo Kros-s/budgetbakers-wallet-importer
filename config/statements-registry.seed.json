@@ -1,0 +1,86 @@
+{
+  "Costco": {
+    "cutDay": 8,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "American Express": {
+    "cutDay": 13,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Platinum Credit Card": {
+    "cutDay": 6,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Banorte": {
+    "cutDay": 10,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Banorte débito": {
+    "cutDay": 2,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Bancomer": {
+    "cutDay": 16,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Nu crédito": {
+    "cutDay": 24,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "NuBank Débito": {
+    "cutDay": 28,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "MIFEL": {
+    "cutDay": 28,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Mercado pago": {
+    "cutDay": 28,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "DolarApp": {
+    "cutDay": 28,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Klar": {
+    "cutDay": 28,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "Meli": {
+    "cutDay": 21,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  },
+  "FinSus": {
+    "cutDay": 28,
+    "source": "manual",
+    "startMonth": "2026-05",
+    "lastReceived": null
+  }
+}
