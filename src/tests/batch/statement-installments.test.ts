@@ -102,3 +102,61 @@ test("a currency symbol or stray space is tolerated too", () => {
   ]);
   assert.equal(writable[0].amount, "-1234.56");
 });
+
+// ── A purchase deferred inside the statement that charged it ──────────────
+
+const platinum = (over: Partial<CsvRow>): CsvRow => ({
+  date: "2026-07-06 12:00:00", account: "Platinum Credit Card", amount: "-2656.67",
+  category: "Others", note: "[Claude reconcile 2026-07]", payee: "MESES EN AUTOMATICO NACIONAL",
+  ...over,
+});
+
+test("a deferral that happens inside one statement is not written twice", () => {
+  // Amex Platinum's July carries all three sides of one $7,970 purchase: the
+  // charge, a credit taking it back out of the revolving balance, and the first
+  // instalment. Read separately it wrote $7,970 twice and held the credit
+  // forever as a transfer nothing will ever answer.
+  const rows = [
+    platinum({ date: "2026-06-22 12:00:00", amount: "-7970.00", payee: "NETPAY*REAL SPORT", category: "Active sport, fitness" }),
+    platinum({ amount: "7970.00", payee: "AMERICAN EXPRESS", category: "Transfer, withdraw" }),
+    platinum({ amount: "-2656.67", meses: "1/3", montooriginal: "7970.00" }),
+  ];
+  const { writable, ignored } = splitForWriting(rows);
+  // The purchase survives, at its real date and its real merchant.
+  assert.deepEqual(writable.map((r) => r.payee), ["NETPAY*REAL SPORT"]);
+  assert.equal(writable[0].amount, "-7970.00");
+  assert.equal(ignored.length, 2);
+});
+
+test("a first instalment whose purchase predates the statement is still restated", () => {
+  // No credit, no original charge: the purchase was billed in an earlier
+  // period, and the instalment row is all there is.
+  const { writable, ignored } = splitForWriting([
+    platinum({ amount: "-2656.67", meses: "1/3", montooriginal: "7970.00" }),
+  ]);
+  assert.equal(writable.length, 1);
+  assert.equal(writable[0].amount, "-7970.00");
+  assert.equal(ignored.length, 0);
+});
+
+test("the deferral credit goes even when the original charge does not appear", () => {
+  // The credit is an entry of the issuer's, not money that moved, so it never
+  // survives — but without the charge the instalment still carries the purchase.
+  const { writable, ignored } = splitForWriting([
+    platinum({ amount: "7970.00", payee: "AMERICAN EXPRESS", category: "Transfer, withdraw" }),
+    platinum({ amount: "-2656.67", meses: "1/3", montooriginal: "7970.00" }),
+  ]);
+  assert.deepEqual(writable.map((r) => r.amount), ["-7970.00"]);
+  assert.equal(ignored.length, 1);
+  assert.equal(ignored[0].payee, "AMERICAN EXPRESS");
+});
+
+test("an unrelated charge of the same size is not mistaken for the purchase", () => {
+  // Without a deferral credit there is no deferral to resolve, so a coincidence
+  // of amount changes nothing.
+  const { writable } = splitForWriting([
+    platinum({ date: "2026-06-22 12:00:00", amount: "-7970.00", payee: "OTRA COMPRA" }),
+    platinum({ amount: "-2656.67", meses: "1/3", montooriginal: "7970.00" }),
+  ]);
+  assert.equal(writable.length, 2);
+});

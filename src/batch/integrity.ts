@@ -100,6 +100,18 @@ const COUNTERPART_SLACK_MS = 48 * 60 * 60 * 1000;
 const isTransferCategory = (name?: string) =>
   !!name && TRANSFER_CATEGORIES.includes(name.trim().toLowerCase());
 
+/**
+ * Categories that describe where money came from well enough that no
+ * counterparty is needed.
+ *
+ * Mercado Pago pays interest 46 times a month, every one of them naming no
+ * sender because the sender is the bank. Flagging all 46 to catch one $6,250
+ * arrival buries the finding under its own noise.
+ */
+const EARNED_INCOME = /interes|interest|dividend|wage|salar|n[óo]mina|rendimiento|ganancia|cashback/i;
+
+const isEarnedIncome = (name?: string): boolean => !!name && EARNED_INCOME.test(name);
+
 /** Whether the statement named a sender at all, as opposed to naming the wire. */
 const namesSomebody = (r: InspectedRecord): boolean => {
   const payee = r.payee?.trim();
@@ -182,7 +194,7 @@ export function checkRunIntegrity(input: IntegrityInput): IntegrityFinding[] {
     // is no telling, and the second reading is the expensive one. Only raised
     // where a description exists to have been silent, so this stays quiet on
     // every path that does not come from a statement.
-    if (!r.transfer && r.type === 0 && r.description && !namesSomebody(r)) {
+    if (!r.transfer && r.type === 0 && r.description && !namesSomebody(r) && !isEarnedIncome(r.categoryName)) {
       findings.push({
         severity: "review",
         kind: "inflow-without-counterparty",

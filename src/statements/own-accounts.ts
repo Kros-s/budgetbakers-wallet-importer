@@ -181,6 +181,14 @@ export function ownAccountFor(text: string, self: string, opts: OwnLookup | stri
     if (entry.requiresHolder && !isHolders(text, payee, holder)) continue;
     return entry.account;
   }
+  // Nothing in the table matched, and it does not have to: if the party at the
+  // other end of the movement is the holder himself, the money went between his
+  // own accounts whoever cleared it. Mercado Pago's July carries
+  // `Transferencia enviada Marco antonio mayen Hernandez` twice, naming no bank
+  // at all — both were transfers to his own accounts, and both were written as
+  // ordinary expenses because no issuer pattern could reach them. Last rather
+  // than first so a movement that DOES name the bank still resolves to it.
+  if (namesHolder(`${text} ${payee ?? ""}`, holder)) return UNRESOLVED;
   return null;
 }
 

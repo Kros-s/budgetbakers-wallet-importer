@@ -115,3 +115,22 @@ test("the holder is recognised through a truncated name, and a stranger is not",
   assert.equal(namesHolder("OCTAVIO ROA SAAVEDRA", HOLDER), false);
   assert.equal(namesHolder("MARCO ANTONIO MAYEN", undefined), false);
 });
+
+test("the holder's own name is enough, with no bank named at all", () => {
+  // Mercado Pago's July: `Transferencia enviada Marco antonio mayen Hernandez`,
+  // twice, naming no bank. Both were transfers to his own accounts and both
+  // were written as ordinary expenses, because no issuer pattern could reach
+  // them.
+  const own = "Transferencia enviada Marco antonio mayen Hernandez";
+  assert.equal(
+    ownAccountFor(own, "Mercado pago", { holder: HOLDER, payee: "Marco antonio mayen Hernandez" }),
+    UNRESOLVED
+  );
+  // A transfer to somebody else, same wording, is still somebody else's.
+  assert.equal(
+    ownAccountFor("Transferencia enviada Oriana Alvarado Carrillo", "Mercado pago", {
+      holder: HOLDER, payee: "Oriana Alvarado Carrillo",
+    }),
+    null
+  );
+});

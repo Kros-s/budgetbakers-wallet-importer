@@ -168,3 +168,18 @@ test("the check stays quiet where no statement was involved", () => {
   const out = checkRunIntegrity({ written: [inflow({ type: 1, payee: "", description: "COMPRA SIN NOMBRE" })] });
   assert.equal(out.filter((f) => f.kind === "inflow-without-counterparty").length, 0);
 });
+
+test("interest paid by the bank needs no counterparty named", () => {
+  // Mercado Pago pays interest 46 times a month, every one of them naming no
+  // sender because the sender is the bank. Flagging all 46 to catch one real
+  // arrival buries the finding under its own noise.
+  const earned = checkRunIntegrity({
+    written: [inflow({ amountCents: 206, categoryName: "Interests, dividends", payee: "Mercado Pago", description: "Ganancia" })],
+  });
+  assert.equal(earned.filter((f) => f.kind === "inflow-without-counterparty").length, 0);
+  // The arrival that was buried among them still surfaces.
+  const arrival = checkRunIntegrity({
+    written: [inflow({ amountCents: 625000, categoryName: "Others", payee: "", description: "Ingreso de dinero" })],
+  });
+  assert.equal(arrival.filter((f) => f.kind === "inflow-without-counterparty").length, 1);
+});

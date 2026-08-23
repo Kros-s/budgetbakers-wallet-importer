@@ -74,11 +74,64 @@ export interface WriteSplit {
  * figure the instalment amount is kept and flagged, since a wrong total is
  * worse than a partial one.
  */
+const cents = (text: string | undefined): number => Math.round(parseMoney(text) * 100);
+
+/**
+ * A purchase deferred to instalments inside the very statement that charged it.
+ *
+ * Amex Platinum's July 2026 carries all three sides of one $7,970 purchase:
+ * the charge itself (`NETPAY*REAL SPORT`, 22-jun), a credit of exactly $7,970
+ * (`MONTO A DIFERIR MESES EN AUTOMATICO`, 6-jul) taking it back out of the
+ * revolving balance, and the first instalment of $2,656.67. The statement is
+ * consistent — the three come to the $2,656.67 actually owed this period — but
+ * the write policy read them separately: it wrote the purchase, restated the
+ * `1/3` to its full price and wrote $7,970 a second time, and held the credit
+ * forever as a transfer whose counterpart no account will ever have.
+ *
+ * So the three are resolved against each other, and only where the statement
+ * itself supplies the whole set:
+ *
+ *   - the deferral credit is always dropped. It is an internal entry of the
+ *     issuer's, not money that moved.
+ *   - if the original charge is in the same ledger, the instalment row is
+ *     dropped and the charge is kept: it has the real date and the real
+ *     merchant, where the instalment row has the deferral date and the
+ *     issuer's own wording.
+ *   - if it is not — the purchase was charged in an earlier period — the
+ *     instalment is restated to the full price as before.
+ *
+ * Nothing here changes the arithmetic. Every row was extracted and still counts
+ * toward the totals the statement publishes; this decides only what is written.
+ */
+function resolveDeferrals(rows: CsvRow[]): Set<CsvRow> {
+  const drop = new Set<CsvRow>();
+  for (const first of rows) {
+    if (!isFirstInstallment(first) || !first.montooriginal) continue;
+    const full = cents(first.montooriginal);
+    if (!Number.isFinite(full) || full === 0) continue;
+
+    const credit = rows.find((r) => r !== first && !drop.has(r) && cents(r.amount) === full);
+    if (!credit) continue;
+    drop.add(credit);
+
+    // The purchase itself: same size, money going out, and not an instalment
+    // line of its own — those are the parts of this same deferral.
+    const charge = rows.find(
+      (r) => r !== first && r !== credit && !drop.has(r) &&
+        cents(r.amount) === -full && !parseInstallment(r)
+    );
+    if (charge) drop.add(first);
+  }
+  return drop;
+}
+
 export function splitForWriting(rows: CsvRow[]): WriteSplit {
   const writable: CsvRow[] = [];
   const ignored: CsvRow[] = [];
+  const drop = resolveDeferrals(rows);
   for (const row of rows) {
     if (isLaterInstallment(row)) { ignored.push(row); continue; }
+    if (drop.has(row)) { ignored.push(row); continue; }
     if (isFirstInstallment(row) && row.montooriginal) {
       const full = parseMoney(row.montooriginal);
       const sign = parseMoney(row.amount) < 0 ? -1 : 1;
@@ -96,7 +149,12 @@ export function describeIgnored(ignored: CsvRow[]): string {
   return ignored
     .map((r) => {
       const i = parseInstallment(r);
-      return `${r.date.slice(0, 10)} $${r.amount} ${r.payee || ""} (${i?.index}/${i?.total})`;
+      const why = i
+        ? i.index > 1
+          ? `${i.index}/${i.total}`
+          : `${i.index}/${i.total} — la compra ya viene completa en este mismo estado`
+        : "asiento del diferimiento, no es dinero que se movió";
+      return `${r.date.slice(0, 10)} $${r.amount} ${r.payee || ""} (${why})`;
     })
     .join("\n");
 }

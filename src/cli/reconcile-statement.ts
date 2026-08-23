@@ -38,7 +38,7 @@ import {
   DATE_SLACK_DAYS, diff, mayMarkReconciled, unresolvedCount,
 } from "../statements/reconcile-core.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
-import { ledgerPath as ledgerPathFor } from "../statements/ledgers.js";
+import { ledgerPath as ledgerPathFor, loadLedger } from "../statements/ledgers.js";
 import { loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
@@ -48,7 +48,7 @@ import { describeIgnored } from "../statements/installments.js";
 import { describeCash } from "../statements/cash.js";
 import type { ExtractionVerdict } from "../statements/extraction.js";
 import { describeHeld, planWrites } from "../statements/write-policy.js";
-import { toWalletRows } from "../statements/crossing.js";
+import { type LedgerRow, toLedgerRows, toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
@@ -84,6 +84,24 @@ function parseArgs(argv: string[]): Args {
 }
 
 
+
+/**
+ * Every other account's statement for this month, in the crossing's shape.
+ *
+ * A statement is read one at a time, but a transfer is not: its other leg is in
+ * a document that may already be on disk and not yet in Wallet. Reading the
+ * siblings costs a few file reads and turns "write this now" into "wait for the
+ * crossing" exactly where it should.
+ */
+function siblingLedgerRows(account: string, month: string): LedgerRow[] {
+  const rows: LedgerRow[] = [];
+  for (const other of Object.keys(loadRegistry())) {
+    if (other === account) continue;
+    const led = loadLedger(other, month);
+    if (led) rows.push(...toLedgerRows(other, led.rows));
+  }
+  return rows;
+}
 
 function loadProfile(account: string): string {
   try {
@@ -248,8 +266,15 @@ async function reconcile(
   // a candidate that one of them answers is not ours to write yet.
   const otherAccounts: Record<string, string> = {};
   for (const [name, id] of Object.entries(lookup.accounts)) otherAccounts[id] = name;
-  const elsewhere = toWalletRows(existing, otherAccounts, lookup.transferCategoryId ?? undefined)
-    .filter((r) => r.account !== args.account);
+  // Wallet's records, plus the OTHER statements already extracted for this
+  // month. Wallet alone was not enough: Mercado Pago's July pays $3,268.48 to
+  // the Meli card and Meli's own July ledger holds the matching +$3,268.48,
+  // but neither is in Wallet yet — so the leg sailed through as an ordinary
+  // expense and would have been booked twice, once from each statement.
+  const elsewhere = [
+    ...toWalletRows(existing, otherAccounts, lookup.transferCategoryId ?? undefined),
+    ...siblingLedgerRows(args.account, args.month),
+  ].filter((r) => r.account !== args.account);
 
   const { now: writable, held, heldReasons, ignored, cash } = planWrites(d.missing, {
     account: args.account,
