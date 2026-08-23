@@ -40,7 +40,7 @@ test("a month is chased once its OWN cut has passed, not the next month's", () =
   // "julio" on 21-jul. Assuming the cut landed in the following month put the
   // whole registry a month behind — /statements showed ⬜ for a month the user
   // already had the PDF for.
-  saveRegistry({ Meli: { cutDay: 21, source: "manual", lastReceived: "2026-06" } });
+  saveRegistry({ Meli: { cutDay: 21, source: "manual", lastReceived: "2026-06", received: ["2026-06"], startMonth: "2026-06" } });
   const hoy = new Date("2026-08-22T12:00:00");
   assert.deepEqual(missingStatements(hoy).map((m) => m.month), ["2026-07"]);
 
@@ -54,7 +54,7 @@ test("a month is chased once its OWN cut has passed, not the next month's", () =
 test("every missing month is reported, not only the most recent", () => {
   // Three months behind used to produce one nag, and the older two were never
   // mentioned again — the reconciliation quietly narrowed to the newest.
-  saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: "2026-04" } });
+  saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: "2026-04", received: ["2026-04"], startMonth: "2026-05" } });
   const months = missingStatements(new Date("2026-08-16T12:00:00")).map((m) => m.month);
   assert.deepEqual(months, ["2026-05", "2026-06", "2026-07", "2026-08"]);
 });
@@ -78,8 +78,8 @@ test("without a startMonth the lookback is capped, not unbounded", () => {
 test("the status view pairs each account with what it owes", async () => {
   const { statementStatus } = await import("../../statements/registry.js");
   saveRegistry({
-    Costco: { cutDay: 10, source: "manual", lastReceived: "2026-06" },
-    "Open bank": { cutDay: 1, source: "email", lastReceived: "2026-08" },
+    Costco: { cutDay: 10, source: "manual", lastReceived: "2026-06", received: ["2026-06"], startMonth: "2026-06" },
+    "Open bank": { cutDay: 1, source: "email", lastReceived: "2026-08", received: ["2026-08"], startMonth: "2026-08" },
   });
   const status = statementStatus(new Date("2026-08-16T12:00:00"));
   const costco = status.find((s) => s.account === "Costco");
@@ -91,13 +91,33 @@ test("the status view pairs each account with what it owes", async () => {
 });
 
 test("received statement stops the nag; older months don't regress it", () => {
-  saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: null } });
+  saveRegistry({ Costco: { cutDay: 10, source: "manual", lastReceived: null, startMonth: "2026-08" } });
   markReceived("Costco", "2026-08");
   assert.deepEqual(missingStatements(new Date("2026-08-16T12:00:00")), []);
   assert.equal(loadRegistry().Costco.lastReceived, "2026-08");
 
   markReceived("Costco", "2026-05"); // late arrival of an old one
-  assert.equal(loadRegistry().Costco.lastReceived, "2026-08");
+  assert.equal(loadRegistry().Costco.lastReceived, "2026-08", "el máximo no retrocede");
+  assert.deepEqual(loadRegistry().Costco.received, ["2026-05", "2026-08"], "pero sí queda registrado");
+});
+
+test("reconciling a later month does not settle the ones still owed", () => {
+  // The live failure: MIFEL and Meli were reconciled for July while May and
+  // June were outstanding, and both months went green with nothing chasing
+  // them. A single high-water mark cannot describe a backlog with holes.
+  saveRegistry({ MIFEL: { cutDay: 28, source: "manual", lastReceived: null, startMonth: "2026-05" } });
+  markReceived("MIFEL", "2026-07");
+  const months = missingStatements(new Date("2026-08-22T12:00:00")).map((m) => m.month);
+  assert.deepEqual(months, ["2026-05", "2026-06"]);
+});
+
+test("a registry written before `received` existed claims only what it knew", () => {
+  // lastReceived recorded the newest month and nothing else, so that is all
+  // that can be honoured; the rest go back to being owed rather than silently
+  // counting as done.
+  saveRegistry({ Meli: { cutDay: 21, source: "manual", lastReceived: "2026-07", startMonth: "2026-05" } });
+  const months = missingStatements(new Date("2026-08-22T12:00:00")).map((m) => m.month);
+  assert.deepEqual(months, ["2026-05", "2026-06"]);
 });
 
 test("unknown account in markReceived is a no-op", () => {

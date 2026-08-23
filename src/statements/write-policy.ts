@@ -50,17 +50,29 @@ function counterpartHold(
   elsewhere: LedgerRow[]
 ): Map<CsvRow, string> {
   if (elsewhere.length === 0) return new Map();
-  const mine = toLedgerRows(account, candidates);
-  const { pairs, possible } = crossTransfers([...mine, ...elsewhere]);
-  const byIndex = new Map<CsvRow, string>();
-  for (const p of [...pairs, ...possible]) {
-    for (const [leg, other] of [[p.out, p.in], [p.in, p.out]] as const) {
-      if (leg.account !== account || other.account === account) continue;
-      const i = mine.indexOf(leg);
-      if (i >= 0) byIndex.set(candidates[i], `contraparte de $${Math.abs(other.cents / 100).toFixed(2)} en ${other.account}`);
+  // Each candidate is converted on its own so the LedgerRow can be tied back to
+  // the CsvRow it came from. Converting the batch and indexing by position was
+  // wrong: toLedgerRows drops unparseable rows, and every dropped row shifted
+  // the mapping — holding an unrelated row and writing the one that needed
+  // holding, silently.
+  const origin = new Map<LedgerRow, CsvRow>();
+  const mine: LedgerRow[] = [];
+  for (const row of candidates) {
+    for (const led of toLedgerRows(account, [row])) {
+      origin.set(led, row);
+      mine.push(led);
     }
   }
-  return byIndex;
+  const { pairs, possible } = crossTransfers([...mine, ...elsewhere]);
+  const byRow = new Map<CsvRow, string>();
+  for (const p of [...pairs, ...possible]) {
+    for (const [leg, other] of [[p.out, p.in], [p.in, p.out]] as const) {
+      const src = origin.get(leg);
+      if (!src || other.account === account) continue;
+      byRow.set(src, `contraparte de $${Math.abs(other.cents / 100).toFixed(2)} en ${other.account}`);
+    }
+  }
+  return byRow;
 }
 
 export function planWrites(

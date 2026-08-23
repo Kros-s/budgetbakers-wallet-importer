@@ -98,3 +98,22 @@ test("without context nothing is held beyond the transfer categories", () => {
   const plan = planWrites([row({ category: "Groceries", amount: "-50.00" })]);
   assert.equal(plan.now.length, 1);
 });
+
+test("an unparseable row does not shift the hold onto its neighbour", () => {
+  // toLedgerRows drops rows it cannot read, and indexing back by position meant
+  // every dropped row shifted the mapping: an unrelated row was held and the
+  // one that needed holding was written.
+  const elsewhere = toWalletRows(
+    [{ accountId: "b", amount: 123400, type: 0, recordDate: "2026-07-09T12:00:00.000Z" } as never],
+    { b: "Bancomer" }
+  );
+  const plan = planWrites(
+    [
+      row({ account: "Costco", amount: "no-es-un-monto", payee: "FILA MALA" }),
+      row({ account: "Costco", amount: "-1234.00", payee: "LA QUE DEBE RETENERSE", date: "2026-07-09 12:00:00" }),
+    ],
+    { account: "Costco", elsewhere }
+  );
+  assert.deepEqual(plan.held.map((r) => r.payee), ["LA QUE DEBE RETENERSE"]);
+  assert.deepEqual(plan.now.map((r) => r.payee), ["FILA MALA"]);
+});

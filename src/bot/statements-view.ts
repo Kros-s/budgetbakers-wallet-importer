@@ -66,7 +66,10 @@ export function gridMonths(today: Date, count: number, missing: string[] = []): 
  * dots rather than a wall of red.
  */
 export function cellFor(status: AccountStatus, month: string): "✅" | "❌" | "⬜" {
-  if (status.lastReceived && month <= status.lastReceived) return "✅";
+  // Only a month actually reconciled is green. Reading it as "anything at or
+  // below the high-water mark" turned two months that were never reconciled
+  // into ✅ the moment a later one arrived.
+  if (status.received.includes(month)) return "✅";
   if (status.missing.includes(month)) return "❌";
   return "⬜";
 }

@@ -6,7 +6,7 @@ import type { AccountStatus } from "../../statements/registry.js";
 const AUG = new Date("2026-08-22T12:00:00");
 
 function status(over: Partial<AccountStatus> = {}): AccountStatus {
-  return { account: "Costco", source: "manual", cutDay: 10, lastReceived: null, missing: [], ...over };
+  return { account: "Costco", source: "manual", cutDay: 10, lastReceived: null, received: [], missing: [], ...over };
 }
 
 test("the grid ends at the previous month — the current one cannot be due", () => {
@@ -17,14 +17,17 @@ test("the grid crosses the year boundary backwards", () => {
   assert.deepEqual(gridMonths(new Date("2026-02-10T12:00:00"), 4), ["2025-10", "2025-11", "2025-12", "2026-01"]);
 });
 
-test("a month at or below lastReceived is settled", () => {
-  const s = status({ lastReceived: "2026-05" });
-  assert.equal(cellFor(s, "2026-04"), "✅");
-  assert.equal(cellFor(s, "2026-05"), "✅");
+test("only a month actually reconciled is settled", () => {
+  // Not "anything at or below the mark": reconciling July while May and June
+  // were outstanding turned both of them green with nothing chasing them.
+  const s = status({ lastReceived: "2026-07", received: ["2026-07"], missing: ["2026-05", "2026-06"] });
+  assert.equal(cellFor(s, "2026-07"), "✅");
+  assert.equal(cellFor(s, "2026-05"), "❌");
+  assert.equal(cellFor(s, "2026-06"), "❌");
 });
 
 test("a chased month is missing, an unchased future one is merely not due", () => {
-  const s = status({ lastReceived: "2026-05", missing: ["2026-06", "2026-07"] });
+  const s = status({ lastReceived: "2026-05", received: ["2026-05"], missing: ["2026-06", "2026-07"] });
   assert.equal(cellFor(s, "2026-06"), "❌");
   assert.equal(cellFor(s, "2026-07"), "❌");
   assert.equal(cellFor(s, "2026-08"), "⬜");
@@ -40,8 +43,8 @@ test("a fresh account shows blanks, not a wall of red", () => {
 test("the table leads with the account that is furthest behind", () => {
   const out = formatStatementsTable(
     [
-      status({ account: "Bancomer", lastReceived: "2026-06", missing: ["2026-07"] }),
-      status({ account: "Costco", lastReceived: "2026-04", missing: ["2026-05", "2026-06", "2026-07"] }),
+      status({ account: "Bancomer", lastReceived: "2026-06", received: ["2026-06"], missing: ["2026-07"] }),
+      status({ account: "Costco", lastReceived: "2026-04", received: ["2026-04"], missing: ["2026-05", "2026-06", "2026-07"] }),
     ],
     AUG
   );
@@ -56,7 +59,7 @@ test("a long account name is cut so the columns stay aligned", () => {
 });
 
 test("everything reconciled says so instead of showing an empty prompt", () => {
-  const out = formatStatementsTable([status({ lastReceived: "2026-07" })], AUG);
+  const out = formatStatementsTable([status({ lastReceived: "2026-07", received: ["2026-07"] })], AUG);
   assert.match(out, /✅ Todo conciliado\./);
   assert.doesNotMatch(out, /Mándame el PDF/);
 });
@@ -65,7 +68,7 @@ test("gaps older than the grid are named, not silently dropped", () => {
   // Truncating the window without saying so makes a two-year hole read as a
   // clean table — the exact failure the all-months fix was for.
   const out = formatStatementsTable(
-    [status({ lastReceived: "2025-10", missing: ["2025-11", "2025-12", "2026-07"] })],
+    [status({ lastReceived: "2025-10", received: ["2025-10"], missing: ["2025-11", "2025-12", "2026-07"] })],
     AUG
   );
   assert.match(out, /2 meses quedan antes de feb/);
@@ -80,7 +83,7 @@ test("a gap in the current month is shown, not pushed off the right edge", () =>
   // An account whose cut already passed this month owes the CURRENT month. The
   // grid used to stop at the previous one and hid exactly that column.
   const out = formatStatementsTable(
-    [status({ account: "Costco", lastReceived: "2026-07", missing: ["2026-08"] })],
+    [status({ account: "Costco", lastReceived: "2026-07", received: ["2026-07"], missing: ["2026-08"] })],
     AUG
   );
   assert.match(out.split("```")[1], /ag/, "la columna de agosto aparece");

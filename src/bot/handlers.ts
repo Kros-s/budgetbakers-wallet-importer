@@ -886,7 +886,11 @@ export function registerHandlers(deps: HandlerDeps): void {
       return true;
     }
 
-    const summary = parseReconcileOutput(run.stdout);
+    // Both streams: every ⚠️ the CLI emits goes to stderr via console.warn, so
+    // reading stdout alone left the summary with no warnings at all — the
+    // charge-mismatch and wrong-account checks were invisible to the user while
+    // the help promised they would be reported.
+    const summary = parseReconcileOutput(`${run.stdout}\n${run.stderr}`);
     const msg = formatReconcileSummary(account, month, summary);
 
     // Nothing is offered for writing account by account. A transfer whose other

@@ -44,7 +44,18 @@ import { toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
 
 const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
-const DATE_SLACK_DAYS = 3;
+/**
+ * How far a statement row and a Wallet record may sit apart and still be the
+ * same movement.
+ *
+ * Five, not three, and for the same reason as period.ts's BOUNDARY_DAYS: the
+ * measured operation-to-posting lag reaches five days at Banamex. At three, a
+ * purchase already recorded from its alert under the operation date failed to
+ * match the statement's posting date, landed in `missing`, and --write booked
+ * it again. The boundary heuristic was already flagging exactly those rows as
+ * edge cases while the matcher refused to reach them.
+ */
+const DATE_SLACK_DAYS = 5;
 
 interface Args {
   pdf: string;
@@ -308,13 +319,23 @@ async function reconcile(
       console.log(`\n✍️ Escritos ${records.length} registro(s) con nota [Claude reconcile ${args.month}].`);
     }
   }
-  markReceived(args.account, args.month);
+  // A month with rows still waiting for the crossing is not reconciled. Marking
+  // it anyway turned /statements green while its transfer legs were unwritten.
+  if (held.length === 0) {
+    markReceived(args.account, args.month);
+  } else {
+    console.log(`↩️ ${args.account} · ${args.month} NO se marca conciliado: ${held.length} fila(s) en espera.`);
+  }
 
   // The PDF has served its purpose — unless something in it is still unresolved.
   // A skipped row counts as unresolved: a lone transfer leg (a card payment
   // whose other side lives in another account) is refused by design, and it is
   // the PDF you go back to when you come to pair it.
-  const retired = retireStatement(args.pdf, d.ambiguous.length + skippedRows);
+  // Held rows count as unresolved: the PDF is what you come back to when the
+  // month is crossed. Before the write-policy refactor a held transfer leg
+  // arrived here as a `skipped` row and kept the PDF by accident; now it does
+  // not reach convertRows at all, so it has to be counted explicitly.
+  const retired = retireStatement(args.pdf, d.ambiguous.length + skippedRows + held.length);
   console.log(retired.removed ? `🗑️ PDF retirado: ${retired.reason}.` : `📎 PDF conservado: ${retired.reason}.`);
 
   const bot = new Telegraf(config.telegramBotToken);

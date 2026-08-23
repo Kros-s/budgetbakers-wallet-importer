@@ -13,8 +13,22 @@ export interface RegistryEntry {
   cutDay: number;
   /** How the PDF arrives: "email" (auto-captured) or "manual" (user downloads). */
   source: "email" | "manual";
-  /** Last reconciled month, "YYYY-MM", or null if never. */
+  /**
+   * Last reconciled month, "YYYY-MM", or null if never. Kept for display and
+   * for migrating older registries; `received` is what decides what is owed.
+   */
   lastReceived: string | null;
+  /**
+   * Every month actually reconciled, "YYYY-MM".
+   *
+   * A single high-water mark cannot describe a backlog with holes in it, and
+   * statements do not arrive in order. Reconciling July while May and June were
+   * still outstanding moved the mark to July, and everything at or below it read
+   * as settled: two months that were never reconciled showed ✅ and were chased
+   * by nothing. Which is the failure bc517c5 set out to fix, surviving in the
+   * one place that scan never looked.
+   */
+  received?: string[];
   /** Days of grace after cutDay before nagging. Default 5. */
   graceDays?: number;
   /**
@@ -42,10 +56,21 @@ export function saveRegistry(reg: Registry): void {
   fs.writeFileSync(REGISTRY_PATH, JSON.stringify(reg, null, 2));
 }
 
+/** Months known to be reconciled, migrating a pre-`received` registry. */
+export function receivedMonths(entry: RegistryEntry): string[] {
+  if (entry.received) return entry.received;
+  // An older registry only recorded the newest one. That is all it actually
+  // knew, so that is all we claim — the rest go back to being owed.
+  return entry.lastReceived ? [entry.lastReceived] : [];
+}
+
 export function markReceived(account: string, month: string): void {
   const reg = loadRegistry();
   const entry = reg[account];
   if (!entry) return;
+  const got = new Set(receivedMonths(entry));
+  got.add(month);
+  entry.received = [...got].sort();
   if (!entry.lastReceived || entry.lastReceived < month) entry.lastReceived = month;
   saveRegistry(reg);
 }
@@ -106,11 +131,10 @@ export function missingStatements(today = new Date()): MissingStatement[] {
     if (!last) continue;
     // Anchored on the last DUE month, not on today: counting back from today
     // yielded one month more than the cap promised.
-    const from = e.lastReceived
-      ? addMonths(e.lastReceived, 1)
-      : e.startMonth ?? addMonths(last, -(DEFAULT_LOOKBACK_MONTHS - 1));
+    const from = e.startMonth ?? addMonths(last, -(DEFAULT_LOOKBACK_MONTHS - 1));
+    const got = new Set(receivedMonths(e));
     for (let m = from; m <= last; m = addMonths(m, 1)) {
-      out.push({ account, month: m, source: e.source });
+      if (!got.has(m)) out.push({ account, month: m, source: e.source });
     }
   }
   return out;
@@ -121,6 +145,8 @@ export interface AccountStatus {
   source: string;
   cutDay: number;
   lastReceived: string | null;
+  /** Months actually reconciled — not "everything up to lastReceived". */
+  received: string[];
   missing: string[];
 }
 
@@ -133,6 +159,7 @@ export function statementStatus(today = new Date()): AccountStatus[] {
     source: e.source,
     cutDay: e.cutDay,
     lastReceived: e.lastReceived,
+    received: receivedMonths(e),
     missing: missing.filter((m) => m.account === account).map((m) => m.month),
   }));
 }

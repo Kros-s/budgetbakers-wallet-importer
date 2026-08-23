@@ -86,3 +86,19 @@ test("what was ignored is named, with its ordinal", () => {
   const out = describeIgnored([row({ meses: "004 de 006" })]);
   assert.match(out, /MERCADO PAGO \(4\/6\)/);
 });
+
+test("a thousands separator does not divide the purchase by a thousand", () => {
+  // parseFloat("32,880.00") is 32 — it stops at the comma. The deferred-purchase
+  // "Original" column is exactly where a bank prints one.
+  const { writable } = splitForWriting([
+    row({ meses: "1/6", amount: "-5480.00", montooriginal: "32,880.00" }),
+  ]);
+  assert.equal(writable[0].amount, "-32880.00");
+});
+
+test("a currency symbol or stray space is tolerated too", () => {
+  const { writable } = splitForWriting([
+    row({ meses: "1/3", amount: "-100.00", montooriginal: " $ 1,234.56 " }),
+  ]);
+  assert.equal(writable[0].amount, "-1234.56");
+});

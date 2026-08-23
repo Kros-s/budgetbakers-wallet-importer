@@ -15,6 +15,8 @@
 export interface Detection {
   issuer: string;
   kind: string;
+  /** Card product or account name as printed — "Gold", "Platinum", "Oro". */
+  product: string;
   period: { from: string; to: string };
 }
 
@@ -28,8 +30,8 @@ const ALIASES: { match: RegExp; account: string }[] = [
   { match: /banamex|costco/i, account: "Costco" },
   { match: /banorte.*(cr[ée]dito|tarjeta)|tarjeta.*banorte/i, account: "Banorte" },
   { match: /banorte/i, account: "Banorte débito" },
-  { match: /(american express|amex).*(platinum)/i, account: "Platinum Credit Card" },
-  { match: /(american express|amex)/i, account: "American Express" },
+  { match: /(american express|\bamex\b).*(platinum)/i, account: "Platinum Credit Card" },
+  { match: /(american express|\bamex\b)/i, account: "American Express" },
   { match: /bbva|bancomer/i, account: "Bancomer" },
   { match: /(mercado ?pago|mp).*(cr[ée]dito|tarjeta)|meli/i, account: "Meli" },
   { match: /mercado ?pago/i, account: "Mercado pago" },
@@ -45,16 +47,41 @@ const ALIASES: { match: RegExp; account: string }[] = [
 export function parseDetection(text: string): Detection | null {
   const issuer = /EMISOR:\s*(.+)/.exec(text)?.[1]?.trim();
   const kind = /TIPO:\s*(.+)/.exec(text)?.[1]?.trim() ?? "";
+  const product = /PRODUCTO:\s*(.+)/.exec(text)?.[1]?.trim() ?? "";
   const period = /PERIODO:\s*(\d{4}-\d{2}-\d{2})\s*\.\.\s*(\d{4}-\d{2}-\d{2})/.exec(text);
   if (!issuer || !period) return null;
   const [, from, to] = period;
   if (from > to) return null;
-  return { issuer, kind, period: { from, to } };
+  return { issuer, kind, product, period: { from, to } };
 }
 
-/** The Wallet account name, or null when nothing matches confidently. */
+/**
+ * Issuers that hold two Wallet accounts, and the pattern that tells them apart.
+ *
+ * Without this, an Amex statement whose text never repeats the word "Platinum"
+ * falls through to the Gold alias and a month of Platinum charges is filed
+ * against the wrong card. Refusing to guess between two known accounts is the
+ * same rule as refusing to guess an unknown issuer — the harm is identical, and
+ * only the unknown case was guarded.
+ */
+const AMBIGUOUS: { issuer: RegExp; discriminators: RegExp[] }[] = [
+  // \bamex\b, not /amex/: "Banamex" contains it, and Banamex is Costco.
+  { issuer: /american express|\bamex\b/i, discriminators: [/platinum/i, /gold|oro/i] },
+  { issuer: /banorte/i, discriminators: [/cr[ée]dito|tarjeta/i, /d[ée]bito|cheques|enlace/i] },
+  { issuer: /^(?!.*meli).*mercado ?pago/i, discriminators: [/cr[ée]dito|tarjeta/i, /inversi[óo]n|cuenta|rendimiento/i] },
+  { issuer: /\bnu\b|nu ?bank|nu m[ée]xico/i, discriminators: [/cr[ée]dito|tarjeta/i, /d[ée]bito|cuenta/i] },
+];
+
+/**
+ * The Wallet account name, or null when nothing matches confidently.
+ *
+ * Null means "ask" — filing a statement under a guessed account writes a month
+ * of movements into an account that never saw them.
+ */
 export function resolveAccount(detection: Detection): string | null {
-  const haystack = `${detection.issuer} ${detection.kind}`;
+  const haystack = `${detection.issuer} ${detection.kind} ${detection.product}`;
+  const ambiguous = AMBIGUOUS.find((a) => a.issuer.test(haystack));
+  if (ambiguous && !ambiguous.discriminators.some((d) => d.test(haystack))) return null;
   for (const { match, account } of ALIASES) {
     if (match.test(haystack)) return account;
   }
@@ -77,6 +104,8 @@ export const DETECTION_PROMPT =
   `ES_ESTADO_DE_CUENTA: si|no\n` +
   `EMISOR: <la institución tal como aparece en el documento>\n` +
   `TIPO: <tarjeta de crédito | cuenta de débito | cuenta de inversión | otro>\n` +
+  `PRODUCTO: <el nombre del producto tal como aparece — "Gold", "Platinum", "Oro", "Enlace", ` +
+  `"Cuenta con Rendimiento" — o "no dice" si el documento no lo nombra>\n` +
   `PERIODO: <inicio>..<fin> en YYYY-MM-DD, copiado del periodo que declara el propio estado\n` +
   `Si no es un estado de cuenta bancario, responde solo "ES_ESTADO_DE_CUENTA: no".`;
 

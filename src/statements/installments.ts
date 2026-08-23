@@ -15,6 +15,21 @@
 
 import type { CsvRow } from "../csv.js";
 
+/**
+ * Reads a money figure the way a statement writes one.
+ *
+ * `parseFloat("32,880.00")` is 32 — it stops at the comma. The prompt forbids a
+ * thousands separator in `amount`, but the deferred-purchases "Original" column
+ * is exactly where a bank prints one, and a $32,880 purchase silently became a
+ * $32 one.
+ */
+export function parseMoney(text: string | undefined): number {
+  if (!text) return NaN;
+  const cleaned = text.replace(/[^0-9.,-]/g, "");
+  // A comma is a thousands separator here; Mexican statements use a dot decimal.
+  return Number(cleaned.replace(/,/g, ""));
+}
+
 export interface Installment {
   index: number;
   total: number;
@@ -65,8 +80,8 @@ export function splitForWriting(rows: CsvRow[]): WriteSplit {
   for (const row of rows) {
     if (isLaterInstallment(row)) { ignored.push(row); continue; }
     if (isFirstInstallment(row) && row.montooriginal) {
-      const full = parseFloat(row.montooriginal);
-      const sign = parseFloat(row.amount) < 0 ? -1 : 1;
+      const full = parseMoney(row.montooriginal);
+      const sign = parseMoney(row.amount) < 0 ? -1 : 1;
       if (Number.isFinite(full) && full !== 0) {
         writable.push({ ...row, amount: (sign * Math.abs(full)).toFixed(2) });
         continue;
