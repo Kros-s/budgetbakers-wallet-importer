@@ -11,6 +11,13 @@
 > with ambiguous or unconvertible rows is no longer marked reconciled; both
 > matchers now consume what they match; and a coincidence no longer takes the
 > counterpart a real transfer needs.
+>
+> **2026-08-23, from running it on real statements.** Four were read by hand and
+> checked against the banks' own totals before the extraction was believed. The
+> arithmetic was never the problem — all four balanced to the cent — and the
+> classification was, which is the part no total can catch. What that produced
+> is recorded in the section below; 0 and 1 are now closed, and the write loop
+> exists.
 
 Two independent reviews went over the reconciliation pipeline on 2026-08-22.
 Everything that loses or duplicates money, or misreports state, was fixed in
@@ -19,7 +26,57 @@ ranked by damage, so none of it survives on trust alone.
 
 Each entry says what breaks, not just what is untidy.
 
-## 0. Transfer legs are paired by date string alone — STILL OPEN, worst of these
+## What running it on real statements found — 2026-08-23
+
+Bancomer's July, the first statement put through end to end, would have written
+$305,131.22 wrong out of sixteen rows while every total balanced exactly.
+
+- **$296,031.22 of transfers from the user's own accounts, written as income.**
+  Money leaving names where it goes (`SPEI ENVIADO MIFEL`) and was held for the
+  crossing. Money arriving names who sent it, in the sender's legal name —
+  DolarApp reaches Bancomer as `SPEI RECIBIDO ARCUS FI / Sent from ARQ / PIER 5,
+  S.A de C.V.` — and nothing in that reads as a transfer. `own-accounts.ts` is
+  the directory that closes it, holding rather than guessing where an issuer
+  covers two Wallet accounts. Neither DolarApp nor FinSus had the outgoing leg
+  recorded either, so the money would have existed twice.
+- **Cross-currency legs could never have paired.** -9,300 USD and
+  +163,202.91 MXN have no arithmetic relation. The peso equivalent DolarApp
+  prints beside the dollar figure now travels in a `mxn` column and both the
+  crossing and `linkTransferPairs` bucket on it.
+- **$9,100 of cash withdrawals written as expenses**, with the cash account
+  never credited — so the money vanished at the ATM and again when it was spent.
+  Expanded into a transfer pair at the point of writing.
+- **A bank's name is not evidence of whose money it is.** The first version of
+  the hold claimed $11,350 of payments to a third party who banks at BBVA. Bank
+  patterns now also require the movement to name the holder; naming nobody still
+  holds, because that is the shape of the $10,155.21 that arrived from the
+  user's own FinSus with no sender printed.
+- **The charges total refused a month that was right to the cent.** Banorte adds
+  its commissions and interest outside "Total de retiros". The declared opening
+  and closing balances are the stronger check and now decide; a charges gap they
+  explain is reported, not blocked.
+- **A credit card was only ever guarded by the weak check**, because it declares
+  no balance — it declares a debt. Read as a negative balance it checks exactly,
+  and a sign read backwards is now named as such.
+
+### Still open, from the same run
+
+- **A month cannot close alone.** Bancomer's July runs 17-jun→16-jul and Banorte
+  débito's runs 02-jun→01-jul: their overlap is fifteen days. Banorte's
+  `+50,187.53 on 13-jun` pairs with Bancomer's JUNE statement, and Bancomer's
+  `-50,187.53 on 15-jul` pairs with Banorte's AUGUST one. `loadMonth` reads one
+  month's ledgers, so a pair that straddles the boundary is reported as two
+  orphans. Adjacent months have to be loaded for the crossing even when only one
+  is being written.
+- **`Coverage.complete` gates `isUnexplainedInflow`**, and with fourteen accounts
+  and periods that do not line up it may never be true. The own-account hold no
+  longer depends on it, but that release rule still does.
+- **A transfer whose counterpart is already in Wallet cannot be linked.**
+  `planMonth`'s `complete` disposition writes a standalone record, because
+  linking to an existing record would mean editing it. It is not a duplicate,
+  but it is half a link.
+
+## 0. Transfer legs are paired by date string alone — FIXED
 
 `src/csv.ts` keys `pendingTransfers` on the date string, with no check of amount,
 sign or account: the second transfer row sharing a date is linked to the first,
@@ -29,7 +86,7 @@ transfers on one day, emitted as `A-out, B-out, A-in, B-in`, produce two records
 sharing a transferId that each point at the other's account — the shape of the
 $323,000 CETES failure. `src/tests/csv.test.ts` has no transfer-pairing test.
 
-## 1. The bot can never write — the write path has no caller
+## 1. The bot can never write — the write path has no caller — FIXED
 
 `reconcileCommand`'s `write` and `fromLedger` options (`src/bot/statement-flow.ts`)
 are passed by nothing. `tryStatementRoute` runs a dry pass and stops; `/cross`
@@ -39,7 +96,7 @@ today the only way to write a statement is the CLI by hand.
 This is deliberate as far as it goes — writes wait for the crossing — but the
 crossing has no write step, so the loop is open.
 
-## 2. The statement write path bypasses the batch's safeguards
+## 2. The statement write path bypasses the batch's safeguards — FIXED
 
 `reconcile-statement.ts` calls `writeRecords` directly. It does not go through
 `buildWalletDedup` (`src/batch/wallet-dedup.ts`) or `checkRunIntegrity`
@@ -61,7 +118,7 @@ refusal in `commitGuardedWrite` is dead code where it matters. It guards nothing
 today, which is not the same as being wrong — the checks need inputs the
 statement path cannot currently produce.
 
-## 3. A first instalment is diffed at one amount and written at another
+## 3. A first instalment is diffed at one amount and written at another — FIXED
 
 `diff()` matches on the instalment amount, because the prompt requires it so the
 statement's totals balance. `splitForWriting` then restates the row to the full
@@ -136,7 +193,7 @@ has no retention at all.
 PDF to the "read it and propose a CSV" path the routing exists to avoid. Same for
 a detection timeout. The failure is swallowed rather than reported.
 
-## 11. The Telegram summary counts what was found, not what was written
+## 11. The Telegram summary counts what was found, not what was written — FIXED
 
 `➕ Agregados del estado` uses `d.missing.length`, before held rows, ignored
 instalments and skipped rows are removed. The pasted CSV block has the same

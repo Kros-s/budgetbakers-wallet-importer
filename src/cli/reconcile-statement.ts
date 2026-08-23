@@ -306,6 +306,11 @@ async function reconcile(
   // instalment figure the diff matched.
   let skippedRows = 0;
   let blocked = false;
+  // What actually reached Wallet, which is not what the diff found: held legs,
+  // ignored instalments and rows the dedup answered all come out in between,
+  // and cash withdrawals go in as two. Reporting `missing.length` told the user
+  // a number no run had produced.
+  let written = 0;
   if (writable.length > 0) {
     const guard = await guardWrite(writable, { lookup, existing });
     skippedRows = guard.skipped.length;
@@ -316,7 +321,8 @@ async function reconcile(
       console.error(`\n⛔ No se escribe nada: la verificación de integridad levantó alerta(s).`);
     } else if (guard.records.length > 0) {
       await commitGuardedWrite(guard, { lookup, existing, couch, userId: ctx.userId });
-      console.log(`\n✍️ Escritos ${guard.records.length} registro(s) con nota [Claude reconcile ${args.month}].`);
+      written = guard.records.length;
+      console.log(`\n✍️ Escritos ${written} registro(s) con nota [Claude reconcile ${args.month}].`);
     } else {
       console.log(`\nNada que escribir después del dedup.`);
     }
@@ -356,7 +362,8 @@ async function reconcile(
   const msg =
     `📄 *Reconciliación ${args.account} · ${args.month}*\n` +
     `✅ Ya registrados: ${d.matched}\n` +
-    `➕ Agregados del estado: ${d.missing.length}\n` +
+    `➕ Escritos en Wallet: ${written}\n` +
+    (held.length ? `⏸️ En espera del cruce: ${held.length}\n` : "") +
     (d.ambiguous.length ? `⚠️ Ambiguos por revisar: ${d.ambiguous.length}\n` : "") +
     (d.walletOnly.length ? `👀 Solo en Wallet (verifica: efectivo/otros): ${d.walletOnly.length}\n` : "") +
     (d.missing.length ? `\n\`\`\`\n${rowsToCsv(d.missing).slice(0, 1500)}\n\`\`\`` : "");
