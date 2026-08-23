@@ -15,6 +15,7 @@
 import type { CsvRow } from "../csv.js";
 import { crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
 import { splitForWriting } from "./installments.js";
+import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
 import { isTransferRow } from "./write-policy.js";
 
 /** How far apart a statement row and a Wallet record may be and still be the same movement. */
@@ -204,6 +205,18 @@ export function planMonth(
     }
     if (isTransferRow(row)) {
       planned.push({ account, row, disposition: "hold", reason: "traspaso sin contraparte todavía" });
+      continue;
+    }
+    // A counterparty the statement names as one of the user's own accounts.
+    // Unconditional, unlike the inflow rule below: completing the month's
+    // coverage is what releases an unexplained inflow, and completing it does
+    // nothing for this one. Bancomer's July carried three arrivals from
+    // DolarApp worth $285,876.01 whose other leg is in a currency no
+    // equal-amount rule can reach; with every statement in, they would have
+    // been written as income all the same.
+    const own = ownAccountFor([row.desc, row.payee].filter(Boolean).join(" "), account);
+    if (own) {
+      planned.push({ account, row, disposition: "hold", reason: describeOwnCounterparty(own) });
       continue;
     }
     if (!opts.coverageComplete && isUnexplainedInflow(row)) {

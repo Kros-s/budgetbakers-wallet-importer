@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { toIso, convertRows, type CsvRow } from "../csv.js";
+import { toIso, convertRows, parseCsv, rowsToCsv, type CsvRow } from "../csv.js";
 import type { LookupMaps } from "../types.js";
 
 test("toIso parses US short date with space separator", () => {
@@ -312,4 +312,24 @@ test("convertRows keeps the surviving records aligned with their source rows", (
         assert.equal(records[i].note, originalRows[i].note?.trim() ?? "", `fila ${i} desalineada`);
         assert.equal(records[i].amount, Math.round(Math.abs(parseFloat(originalRows[i].amount)) * 100));
     }
+});
+
+// ── Statement columns survive a round trip ────────────────────────────────
+
+test("rowsToCsv keeps the statement columns", () => {
+  // The bot re-parses the block it pasted when a proposal is confirmed. A
+  // marker dropped here is a later instalment written that should never have
+  // been, and a first one written at the instalment price instead of the
+  // purchase's.
+  const row = {
+    date: "2026-07-05 12:00:00", account: "Costco", amount: "-5480.00",
+    category: "Electronics", note: "[Claude reconcile 2026-07]", payee: "MERCADO PAGO",
+    opdate: "2026-06-04", meses: "1/6", montooriginal: "32880.00",
+    desc: "MERPAGO*SAMSUNG 001 de 006", mxn: "", efectivo: "",
+  };
+  const back = parseCsv(rowsToCsv([row]))[0];
+  assert.equal(back.meses, "1/6");
+  assert.equal(back.montooriginal, "32880.00");
+  assert.equal(back.opdate, "2026-06-04");
+  assert.equal(back.desc, "MERPAGO*SAMSUNG 001 de 006");
 });

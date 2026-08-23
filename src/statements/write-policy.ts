@@ -16,6 +16,8 @@
 import type { CsvRow } from "../csv.js";
 import { splitForWriting } from "./installments.js";
 import { crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
+import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
+import { expandCashWithdrawals, isCashWithdrawal } from "./cash.js";
 
 /** The categories Wallet uses for a transfer leg, in the spellings the extractor emits. */
 export function isTransferRow(row: CsvRow): boolean {
@@ -31,6 +33,8 @@ export interface WritePlan {
   heldReasons: string[];
   /** Later instalments of a deferred purchase, deliberately left out. */
   ignored: CsvRow[];
+  /** Cash withdrawals that became a transfer pair against the cash account. */
+  cash: CsvRow[];
 }
 
 /**
@@ -90,10 +94,29 @@ export function planWrites(
 
   const hold = opts.account ? counterpartHold(rest, opts.account, opts.elsewhere ?? []) : new Map();
   for (const row of rest) {
+    // A counterparty the statement names as one of the user's own accounts,
+    // whatever category the extractor reached for. Money leaving says where it
+    // goes and was already caught above; money arriving says only who sent it,
+    // in the sender's legal name, and read as income — three of those in one
+    // month were $285,876.01 of earnings the user never had. Checked before the
+    // amount-based hold because it explains itself, and a reason a human can
+    // act on is worth more than "some other account had the same figure".
+    const own = opts.account ? ownAccountFor(counterpartyText(row), opts.account) : null;
+    if (own) { held.push(row); heldReasons.push(describeOwnCounterparty(own)); continue; }
     const why = hold.get(row);
     if (why) { held.push(row); heldReasons.push(why); } else { now.push(row); }
   }
-  return { now, held, heldReasons, ignored };
+  // Last, and only over what is actually being written: a withdrawal expanded
+  // before the holds above would arrive carrying a transfer category and be
+  // held for a counterpart that no statement will ever bring — the cash account
+  // does not issue one.
+  const cash = now.filter((r) => isCashWithdrawal(r) && parseFloat(r.amount) < 0);
+  return { now: expandCashWithdrawals(now), held, heldReasons, ignored, cash };
+}
+
+/** Everything on a row that could name the account on the other side. */
+function counterpartyText(row: CsvRow): string {
+  return [row.desc, row.payee].filter(Boolean).join(" ");
 }
 
 export function describeHeld(held: CsvRow[], reasons: string[] = []): string {

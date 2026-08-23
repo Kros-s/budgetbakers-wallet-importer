@@ -250,3 +250,59 @@ test("a coincidence does not take the counterpart a real transfer needs", () => 
     ["Bancomer", "Banorte"]
   );
 });
+
+// ── Cross-currency pairing ────────────────────────────────────────────────
+// DolarApp records -9,300 USD and Bancomer records +163,202.91 MXN for one
+// movement. No equal-amount rule reaches across that; the peso equivalent the
+// DolarApp statement prints beside the dollar figure does.
+
+const usdLeg = (over: Partial<CsvRow> = {}): CsvRow => ({
+  date: "2026-07-01 12:00:00", account: "DolarApp", amount: "-9300.00",
+  category: "Transfer, withdraw", note: "", payee: "Marco Mayen",
+  mxn: "-163202.91", ...over,
+});
+const mxnLeg = (over: Partial<CsvRow> = {}): CsvRow => ({
+  date: "2026-07-01 12:00:00", account: "Bancomer", amount: "163202.91",
+  category: "Transfer, withdraw", note: "", payee: "PIER 5, S.A de C.V.", ...over,
+});
+
+test("the two legs of a cross-currency transfer pair on the published peso figure", () => {
+  const rows = [...toLedgerRows("DolarApp", [usdLeg()]), ...toLedgerRows("Bancomer", [mxnLeg()])];
+  const { pairs } = crossTransfers(rows);
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].out.account, "DolarApp");
+  assert.equal(pairs[0].in.account, "Bancomer");
+});
+
+test("the peso figure takes its sign from the movement, not from how it was printed", () => {
+  // DolarApp prints the equivalent without a sign on some lines. An outgoing
+  // leg whose peso figure came out positive would look for a counterpart in the
+  // wrong direction and find none.
+  const rows = [
+    ...toLedgerRows("DolarApp", [usdLeg({ mxn: "163,202.91" })]),
+    ...toLedgerRows("Bancomer", [mxnLeg()]),
+  ];
+  assert.equal(rows[0].pesos, -16320291);
+  assert.equal(crossTransfers(rows).pairs.length, 1);
+});
+
+test("without a published equivalent the two legs stay unpaired", () => {
+  // The rate is not ours to invent: 9,300 USD and 163,202.91 MXN have no
+  // arithmetic relation, and pairing them on the date alone is how two
+  // unrelated movements get merged.
+  const rows = [
+    ...toLedgerRows("DolarApp", [usdLeg({ mxn: undefined })]),
+    ...toLedgerRows("Bancomer", [mxnLeg()]),
+  ];
+  assert.equal(crossTransfers(rows).pairs.length, 0);
+});
+
+test("a peso equivalent does not let two same-currency rows match on the wrong figure", () => {
+  // Both legs are MXN and neither carries `mxn`; the ordinary rule decides, and
+  // amounts that differ still do not pair.
+  const rows = [
+    ...toLedgerRows("Bancomer", [mxnLeg({ amount: "-500.00", account: "Bancomer" })]),
+    ...toLedgerRows("MIFEL", [mxnLeg({ amount: "400.00", account: "MIFEL" })]),
+  ];
+  assert.equal(crossTransfers(rows).pairs.length, 0);
+});

@@ -117,3 +117,59 @@ test("an unparseable row does not shift the hold onto its neighbour", () => {
   assert.deepEqual(plan.held.map((r) => r.payee), ["LA QUE DEBE RETENERSE"]);
   assert.deepEqual(plan.now.map((r) => r.payee), ["FILA MALA"]);
 });
+
+// ── An arrival from one of your own accounts ──────────────────────────────
+// Money leaving names where it goes and was already held above. Money arriving
+// names only who sent it, in the sender's legal name, and read as income.
+
+const ARQ_DESC =
+  "SPEI RECIBIDOARCUS FI 6062885Sent from ARQ Referencia 0194292099 706 " +
+  "00706180105819089043 PIER 5, S.A de C.V.";
+
+test("an inflow whose sender is one of your own accounts waits for the crossing", () => {
+  // Bancomer's July 2026: three of these, $285,876.01, every one categorised
+  // Others because nothing on the line says DolarApp.
+  const plan = planWrites(
+    [row({ account: "Bancomer", amount: "59485.33", category: "Others", payee: "PIER 5, S.A de C.V.", desc: ARQ_DESC })],
+    { account: "Bancomer" }
+  );
+  assert.equal(plan.now.length, 0);
+  assert.equal(plan.held.length, 1);
+  assert.equal(plan.heldReasons[0], "contraparte es tu cuenta DolarApp");
+});
+
+test("real income from a third party is still written", () => {
+  // The same statement, the same shape of line, a genuine client payment.
+  const plan = planWrites(
+    [row({
+      account: "Bancomer", amount: "10000.00", category: "Others",
+      payee: "Hosting - Banamex", desc: "SPEI RECIBIDOBANAMEX 0160726Hosting Referencia 0178549454 002",
+    })],
+    { account: "Bancomer" }
+  );
+  assert.equal(plan.now.length, 1);
+  assert.equal(plan.held.length, 0);
+});
+
+test("the hold does not fire on the statement's own issuer", () => {
+  // A Banorte statement says "Banorte" on every page; without the guard every
+  // row on it would be held as a transfer to itself and the month never closes.
+  const plan = planWrites(
+    [row({ account: "Banorte débito", amount: "-450.00", category: "Groceries", desc: "COMPRA BANORTE DEBITO SUC 1234" })],
+    { account: "Banorte débito" }
+  );
+  assert.equal(plan.now.length, 1);
+});
+
+test("a cash withdrawal leaves as a pair, and is not held waiting for a statement", () => {
+  // The cash account issues no statement, so a leg held for its counterpart
+  // would wait forever. Both legs are produced here instead.
+  const plan = planWrites(
+    [row({ account: "Bancomer", amount: "-2600.00", category: "Others", payee: "Retiro sin tarjeta QR", efectivo: "1" })],
+    { account: "Bancomer" }
+  );
+  assert.equal(plan.held.length, 0);
+  assert.equal(plan.cash.length, 1);
+  assert.deepEqual(plan.now.map((r) => r.account), ["Bancomer", "Wallet"]);
+  assert.deepEqual(plan.now.map((r) => r.amount), ["-2600.00", "2600.00"]);
+});

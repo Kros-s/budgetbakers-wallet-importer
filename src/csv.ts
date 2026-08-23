@@ -89,6 +89,36 @@ export interface CsvRow {
    * purchase in six shows $5,480 on the movement line and the full figure here.
    */
   montooriginal?: string;
+  /**
+   * The movement's description as the statement prints it, reference block and
+   * all — `"SPEI RECIBIDO ARCUS FI 6062885Sent from ARQ PIER 5, S.A de C.V."`.
+   *
+   * `payee` is the cleaned-up name a human would read; this is the raw text,
+   * and it is the only place a counterparty identifies itself. Without it
+   * `statements/own-accounts.ts` has nothing to match on: an incoming transfer
+   * from DolarApp reaches Wallet as income from a company nobody recognises.
+   */
+  desc?: string;
+  /**
+   * The movement's value in the account's LOCAL currency, when the account is
+   * held in another one and the statement publishes both.
+   *
+   * DolarApp's statement prints `Venta USDc -9,300 | MXN | -163,202.91`: the
+   * record is written in USD, but the peso figure is the only thing that can
+   * pair it with the +$163,202.91 that arrived in Bancomer the same day. An
+   * equal-amount rule can never match the two legs of a cross-currency
+   * transfer; this is what it matches on instead.
+   */
+  mxn?: string;
+  /**
+   * `"1"` when the movement is cash leaving the account — an ATM or QR
+   * withdrawal.
+   *
+   * Written as one row so the statement's own totals still add up, and expanded
+   * into a transfer pair against the cash account at the point of writing. See
+   * `statements/cash.ts`.
+   */
+  efectivo?: string;
 }
 
 /** A row that could not be converted, with a reason. */
@@ -110,7 +140,15 @@ export interface ParseResult {
 }
 
 /** The header for our custom CSV format. */
-export const CSV_HEADER = ["date", "account", "amount", "category", "note", "payee", "label"] as const;
+export const CSV_HEADER = [
+  "date", "account", "amount", "category", "note", "payee", "label",
+  // The statement columns travel with the row or they do not survive a round
+  // trip. `rowsToCsv` is not only a debug artefact: the bot re-parses the block
+  // it pasted when a proposal is confirmed, so a marker dropped here is a
+  // deferred purchase written at the wrong price and an instalment written at
+  // all. They are blank for every row that has no statement behind it.
+  "opdate", "meses", "montooriginal", "desc", "mxn", "efectivo",
+] as const;
 
 /**
  * Transfer rows are a special case: we accept common aliases and map them

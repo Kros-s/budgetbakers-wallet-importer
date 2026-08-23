@@ -45,6 +45,7 @@ import {
 } from "../statements/period.js";
 import { chargesMismatch, netMismatch, parseDeclaredCharges, parseDeclaredNet } from "../statements/extraction.js";
 import { describeIgnored } from "../statements/installments.js";
+import { describeCash } from "../statements/cash.js";
 import { describeHeld, planWrites } from "../statements/write-policy.js";
 import { toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
@@ -104,8 +105,8 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `TAMBIÉN van. NO recortes al mes ${args.month} — ese es solo la etiqueta del estado.\n\n` +
     `Emite un único bloque CSV:\n\n` +
     `<<<CSV>>>\n` +
-    `date,account,amount,category,note,payee,opdate,meses,montooriginal\n` +
-    `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ,2026-07-04,,\n` +
+    `date,account,amount,category,note,payee,opdate,meses,montooriginal,desc,mxn,efectivo\n` +
+    `2026-07-05 12:00:00,${args.account},-123.45,Groceries,"[Claude reconcile ${args.month}]",COMERCIO XYZ,2026-07-04,,,"COMPRA COMERCIO XYZ REF 998",,\n` +
     `<<<END>>>\n\n` +
     `Reglas:\n` +
     `- account SIEMPRE "${args.account}" (todas las filas).\n` +
@@ -135,7 +136,19 @@ function buildExtractionPrompt(args: Args, profile: string): string {
     `- Si además es la PRIMERA parcialidad, busca el precio total de la compra en la sección de compras ` +
     `diferidas (columna "Original") y ponlo en \`montooriginal\`. Si no aparece, déjala vacía.\n` +
     `- No deduzcas la parcialidad de la descripción: un comercio que termina en "12/25" casi siempre es ` +
-    `una fecha. Solo copia lo que el estado publique en su propia columna.\n\n` +
+    `una fecha. Solo copia lo que el estado publique en su propia columna.\n` +
+    `- desc: la descripción COMPLETA del movimiento tal como la imprime el estado, incluyendo el bloque ` +
+    `de referencia que va debajo (concepto, CLABE, nombre del ordenante). Ejemplo real de BBVA: ` +
+    `"SPEI RECIBIDO ARCUS FI 6062885Sent from ARQ Referencia 0194292099 706 00706180105819089043 ` +
+    `PIER 5, S.A de C.V.". En una sola línea, entre comillas. Es lo único que identifica a la ` +
+    `contraparte: sin ella un traspaso desde otra cuenta del usuario se registra como ingreso.\n` +
+    `- mxn: SOLO si la cuenta está en otra moneda y el estado publica además el equivalente en pesos ` +
+    `(DolarApp imprime "Venta USDc -9,300 | MXN | -163,202.91"). Pon ahí el equivalente en MXN; el ` +
+    `\`amount\` sigue en la moneda de la cuenta. Si el estado no publica un equivalente en pesos para ` +
+    `ese movimiento, déjala VACÍA — no la calcules tú con un tipo de cambio.\n` +
+    `- efectivo: pon "1" cuando el movimiento sea dinero en efectivo SALIENDO de la cuenta — retiro en ` +
+    `cajero, "RETIRO SIN TARJETA", "DISPOSICION DE EFECTIVO", retiro por QR. Vacía en cualquier otro ` +
+    `caso. No la uses para pagos con tarjeta ni para transferencias.\n\n` +
     `${CATALOG_PROMPT}\n\n` +
     `Al final, después del bloque CSV, agrega DOS líneas:\n` +
     `- "TOTAL_MOVIMIENTOS: <n>" con el número de filas.\n` +
@@ -229,7 +242,7 @@ async function reconcile(
   const elsewhere = toWalletRows(existing, otherAccounts, lookup.transferCategoryId ?? undefined)
     .filter((r) => r.account !== args.account);
 
-  const { now: writable, held, heldReasons, ignored } = planWrites(d.missing, {
+  const { now: writable, held, heldReasons, ignored, cash } = planWrites(d.missing, {
     account: args.account,
     elsewhere,
   });
@@ -245,7 +258,22 @@ async function reconcile(
     console.log(`🧾 Compra a meses ${r.meses} — se registra completa por $${r.amount}, no la parcialidad.`);
   }
 
+  if (cash.length > 0) {
+    console.log(`💵 ${cash.length} retiro(s) de efectivo — se registran como traspaso a la cuenta de efectivo:`);
+    console.log(describeCash(cash).split("\n").map((l) => `   ${l}`).join("\n"));
+  }
+
   if (!args.write) {
+    // The same guard the write runs, reporting only. A dry run that says
+    // nothing about duplicates or integrity is a preview of a different
+    // decision from the one --write will make, and the alerts it raises — three
+    // arrivals from DolarApp booked as $285,876.01 of income — are worth
+    // reading before the flag goes on, not after.
+    if (writable.length > 0) {
+      const preview = await guardWrite(writable, { lookup, existing });
+      const report = formatGuardReport(preview);
+      if (report.trim()) console.log(`\n${report}`);
+    }
     console.log(
       `\nDry — nada escrito en Wallet. Con --write se agregarían ${writable.length}` +
         (held.length ? `; ${held.length} espera(n) al cruce` : "") + `.`

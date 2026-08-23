@@ -36,6 +36,18 @@ export interface LedgerRow {
   date: string;
   category: string;
   payee: string;
+  /**
+   * Signed cents in the local currency, for a movement on an account held in
+   * another one.
+   *
+   * The equal-amount rule below cannot pair the two legs of a cross-currency
+   * transfer: DolarApp records `-9,300 USD` and Bancomer records
+   * `+163,202.91 MXN`, and no arithmetic relates them without a rate nobody
+   * published. What IS published is the peso figure, printed on the DolarApp
+   * statement beside the dollar one, and this is it. Only the foreign leg
+   * carries it — the peso leg's own `cents` already are the peso figure.
+   */
+  pesos?: number;
 }
 
 export interface TransferPair {
@@ -71,16 +83,48 @@ function isTransferRow(r: LedgerRow): boolean {
 export const DEFAULT_GAP_DAYS = 4;
 
 export function toLedgerRows(account: string, rows: CsvRow[]): LedgerRow[] {
-  return rows.map((row) => ({
-    account,
-    source: "statement" as const,
-    cents: Math.round(parseFloat(row.amount) * 100),
-    time: Date.parse(row.date.replace(" ", "T")),
-    opTime: row.opdate ? Date.parse(`${row.opdate}T12:00:00`) : undefined,
-    date: row.date.slice(0, 10),
-    category: row.category ?? "",
-    payee: row.payee ?? "",
-  })).filter((r) => Number.isFinite(r.cents) && Number.isFinite(r.time));
+  return rows.map((row) => {
+    const cents = Math.round(parseFloat(row.amount) * 100);
+    return {
+      account,
+      source: "statement" as const,
+      cents,
+      // The local figure takes its sign from the movement, never from how the
+      // statement chose to print it. DolarApp writes the dollar amount with a
+      // sign and the peso equivalent without one on some lines; a peso leg that
+      // came out positive would go looking for a counterpart in the wrong
+      // direction and find nothing.
+      pesos: localCents(row.mxn, cents),
+      time: Date.parse(row.date.replace(" ", "T")),
+      opTime: row.opdate ? Date.parse(`${row.opdate}T12:00:00`) : undefined,
+      date: row.date.slice(0, 10),
+      category: row.category ?? "",
+      payee: row.payee ?? "",
+    };
+  }).filter((r) => Number.isFinite(r.cents) && Number.isFinite(r.time));
+}
+
+/** The statement's local-currency figure in signed cents, or undefined if it published none. */
+function localCents(mxn: string | undefined, cents: number): number | undefined {
+  const raw = mxn?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw.replace(/[^0-9.-]/g, "").replace(/(?!^)-/g, ""));
+  if (!Number.isFinite(value) || value === 0) return undefined;
+  return Math.round(Math.abs(value) * 100) * (cents < 0 ? -1 : 1);
+}
+
+/**
+ * Whether two legs are the same movement seen from both sides.
+ *
+ * Same currency, the figures are each other's negation. Across currencies the
+ * only comparable pair is the peso equivalent the foreign statement publishes
+ * against the peso account's face value — and at least one side must actually
+ * carry one, or this would pair any two rows whose currencies happen to differ.
+ */
+function sameSize(out: LedgerRow, cand: LedgerRow): boolean {
+  if (cand.cents === -out.cents) return true;
+  if (out.pesos === undefined && cand.pesos === undefined) return false;
+  return (cand.pesos ?? cand.cents) === -(out.pesos ?? out.cents);
 }
 
 /**
@@ -157,7 +201,7 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
       for (const cand of ins) {
         if (used.has(cand)) continue;
         if (cand.account === out.account) continue;
-        if (cand.cents !== -out.cents) continue;
+        if (!sameSize(out, cand)) continue;
         if (!accept(out, cand)) continue;
         const gap = closestGap(out, cand);
         if (gap > window) continue;

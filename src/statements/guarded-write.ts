@@ -46,6 +46,7 @@ import type { CsvRow, SkippedRow } from "../csv.js";
 import { writeRecords } from "../records.js";
 import type { BulkResult, LookupMaps, NewRecord, WalletRecord } from "../types.js";
 import { splitForWriting } from "./installments.js";
+import { expandCashWithdrawals } from "./cash.js";
 
 /**
  * How far a proposal and an existing record may sit apart and still be the same
@@ -237,7 +238,14 @@ export async function guardWrite(rows: CsvRow[], ctx: GuardInput): Promise<Guard
   // to record. Re-restating a first instalment yields the same figure.
   const { writable: staged, ignored } = splitForWriting(rows);
 
-  const { records, originalRows, skipped } = convertRows(staged, ctx.lookup);
+  // A cash withdrawal is a transfer to the cash account, and both legs have to
+  // exist before `convertRows` runs — that is what links them into a pair. The
+  // month path reaches here without passing through `planWrites`, so this is
+  // the one place both paths share. Expansion clears its own marker, so a set
+  // that was already expanded comes through untouched.
+  const withCash = expandCashWithdrawals(staged);
+
+  const { records, originalRows, skipped } = convertRows(withCash, ctx.lookup);
 
   const cleared: GuardedRecord[] = [];
   const duplicates: RejectedRecord[] = [];

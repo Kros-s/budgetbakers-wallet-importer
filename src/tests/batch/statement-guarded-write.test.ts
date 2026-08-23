@@ -347,3 +347,31 @@ test("the report names every rejection so nothing disappears silently", async ()
   assert.match(report, /Parcialidades ignoradas/);
   assert.match(report, /Unknown category/);
 });
+
+test("a cash withdrawal reaches the guard as a linked pair", () => {
+  // The month path builds its rows from planMonth and never passes through
+  // planWrites, so the expansion has to happen here too — and a set that was
+  // already expanded must come through untouched, or one withdrawal becomes two.
+  const maps: LookupMaps = {
+    ...lookup,
+    accounts: { ...lookup.accounts, Wallet: "-Account_cash" },
+    accountCurrencies: { ...lookup.accountCurrencies, Wallet: "-Currency_mxn" },
+    categories: { ...lookup.categories, Others: "-Category_others" },
+  };
+  const withdrawal: CsvRow = {
+    date: "2026-06-25 12:00:00", account: "Banamex", amount: "-2600.00",
+    category: "Others", note: "[Claude reconcile 2026-07]", payee: "Retiro sin tarjeta QR",
+    efectivo: "1",
+  };
+  return guardWrite([withdrawal], { lookup: maps, existing: [] }).then((res) => {
+    assert.equal(res.records.length, 2);
+    const [out, into] = res.records;
+    assert.equal(out.transfer, true);
+    assert.equal(into.transfer, true);
+    assert.ok(out.transferId);
+    assert.equal(out.transferId, into.transferId);
+    assert.equal(out.amount, into.amount);
+    assert.notEqual(out.type, into.type);
+    assert.notEqual(out.accountId, into.accountId);
+  });
+});

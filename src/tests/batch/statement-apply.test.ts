@@ -188,3 +188,31 @@ test("one Wallet record cannot settle two identical statement rows", () => {
   assert.equal(countBy(plan).recorded, 1);
   assert.equal(countBy(plan).write, 1);
 });
+
+// ── A month's plan and an arrival from your own account ───────────────────
+
+test("planMonth holds an arrival from your own account even with the month complete", () => {
+  // `isUnexplainedInflow` releases an inflow once every statement is in.
+  // Completing the coverage does nothing for this one: DolarApp's other leg is
+  // in dollars, and no equal-amount rule will ever reach it. Released, it is
+  // $163,202.91 of income the user never earned.
+  const arq = {
+    date: "2026-07-01 12:00:00", account: "Bancomer", amount: "163202.91",
+    category: "Others", note: "", payee: "PIER 5, S.A de C.V.",
+    desc: "SPEI RECIBIDOARCUS FI 6286879Sent from ARQ 00706180105819089043 PIER 5, S.A de C.V.",
+  };
+  const plan = planMonth("2026-07", [{ account: "Bancomer", rows: [arq] }], [], { coverageComplete: true });
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0].disposition, "hold");
+  assert.equal(plan.planned[0].reason, "contraparte es tu cuenta DolarApp");
+});
+
+test("planMonth still writes genuine income once the month is complete", () => {
+  const client = {
+    date: "2026-07-16 12:00:00", account: "Bancomer", amount: "10000.00",
+    category: "Others", note: "", payee: "Hosting - Banamex",
+    desc: "SPEI RECIBIDOBANAMEX 0160726Hosting Referencia 0178549454 002",
+  };
+  const plan = planMonth("2026-07", [{ account: "Bancomer", rows: [client] }], [], { coverageComplete: true });
+  assert.equal(plan.planned[0].disposition, "write");
+});
