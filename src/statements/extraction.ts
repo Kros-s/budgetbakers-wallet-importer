@@ -92,3 +92,45 @@ export function netMismatch(rows: CsvRow[], declaredNetCents: number | null): st
     `(inversión, apartados, plazo fijo): un traspaso entre ellas NO mueve la cuenta y no debe extraerse.`
   );
 }
+
+/** The two totals a statement publishes about itself, and what they mean together. */
+export interface ExtractionVerdict {
+  /** A discrepancy that means a movement is missing. Non-null blocks the write. */
+  blocking: string | null;
+  /** A discrepancy that is explained by how the statement adds up. Worth saying, not worth blocking. */
+  note: string | null;
+}
+
+/**
+ * Weighs the charges total against the balance movement, which is the stronger
+ * of the two and the only one that cannot be satisfied by being self-consistent.
+ *
+ * They measure different things, and Banorte's summary is where that stops
+ * being academic: it prints "Total de retiros $413,739.25" and then lists
+ * "Total de comisiones $299.00" and "Intereses Cobrados $19,095.75"
+ * SEPARATELY, so an extraction that correctly captures all twenty movements
+ * reports $433,134.00 in charges and looks $19,394.75 over. Blocking on that
+ * refuses a month that is right to the cent.
+ *
+ * So when the declared opening and closing balances account for exactly what
+ * was extracted, a charges gap is a difference of definition and is reported as
+ * one. When they do not, nothing else matters: rows are missing or invented.
+ */
+export function weighTotals(
+  rows: CsvRow[],
+  declaredChargesCents: number | null,
+  declaredNetCents: number | null
+): ExtractionVerdict {
+  const charges = chargesMismatch(rows, declaredChargesCents);
+  const net = netMismatch(rows, declaredNetCents);
+  if (net) return { blocking: net, note: charges };
+  if (declaredNetCents !== null) {
+    // The balance closed exactly. Anything the charges total disagrees about is
+    // a total the statement built to a different rule.
+    return {
+      blocking: null,
+      note: charges && `${charges}. El saldo declarado sí cuadra al centavo, así que es diferencia de definición: el estado suma sus cargos aparte de comisiones e intereses`,
+    };
+  }
+  return { blocking: charges, note: null };
+}

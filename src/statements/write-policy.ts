@@ -108,7 +108,9 @@ export function planWrites(
     // month were $285,876.01 of earnings the user never had. Checked before the
     // amount-based hold because it explains itself, and a reason a human can
     // act on is worth more than "some other account had the same figure".
-    const own = opts.account ? ownAccountFor(counterpartyText(row), opts.account) : null;
+    const own = opts.account
+      ? ownAccountFor(counterpartyText(row), opts.account, { payee: row.payee })
+      : null;
     if (own) { held.push(row); heldReasons.push(describeOwnCounterparty(own)); continue; }
     const why = hold.get(row);
     if (why) { held.push(row); heldReasons.push(why); } else { now.push(row); }
@@ -125,6 +127,8 @@ function isCashOut(row: CsvRow): boolean {
 function counterpartyText(row: CsvRow): string {
   return [row.desc, row.payee].filter(Boolean).join(" ");
 }
+
+export { counterpartyText };
 
 export function describeHeld(held: CsvRow[], reasons: string[] = []): string {
   return held

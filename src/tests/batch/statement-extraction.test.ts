@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   chargesMismatch, extractedChargesCents, extractedNetCents, netMismatch,
-  parseDeclaredCharges, parseDeclaredNet,
+  parseDeclaredCharges, parseDeclaredNet, weighTotals,
 } from "../../statements/extraction.js";
 import type { CsvRow } from "../../csv.js";
 
@@ -76,4 +76,41 @@ test("a net that the statement does not declare yields no verdict", () => {
 
 test("the net counts money in and money out, not just charges", () => {
   assert.equal(extractedNetCents([row("-197.08"), row("3268.48")]), 307140);
+});
+
+// ── The two totals, weighed against each other ────────────────────────────
+
+test("a charges gap the balance explains does not block the write", () => {
+  // Banorte's summary prints "Total de retiros $413,739.25" and lists
+  // "Total de comisiones $299.00" and "Intereses Cobrados $19,095.75"
+  // separately. All twenty movements captured correctly sum to $433,134.00 in
+  // charges and look $19,394.75 over.
+  const rows: CsvRow[] = [
+    { date: "2026-07-01 12:00:00", account: "Banorte débito", amount: "-413739.25", category: "Others", note: "", payee: "" },
+    { date: "2026-07-01 12:00:00", account: "Banorte débito", amount: "-299.00", category: "Charges, Fees", note: "", payee: "" },
+    { date: "2026-07-01 12:00:00", account: "Banorte débito", amount: "-19095.75", category: "Loan, interests", note: "", payee: "" },
+    { date: "2026-06-02 12:00:00", account: "Banorte débito", amount: "377061.08", category: "Others", note: "", payee: "" },
+  ];
+  const verdict = weighTotals(rows, 41373925, -5607292);
+  assert.equal(verdict.blocking, null);
+  assert.match(verdict.note ?? "", /diferencia de definición/);
+});
+
+test("a balance that does not close blocks, whatever the charges total says", () => {
+  // Rows missing or invented: nothing else matters.
+  const rows: CsvRow[] = [
+    { date: "2026-07-01 12:00:00", account: "Klar", amount: "210000.00", category: "Others", note: "", payee: "" },
+  ];
+  const verdict = weighTotals(rows, null, 242082);
+  assert.ok(verdict.blocking);
+  assert.match(verdict.blocking ?? "", /bolsas internas/);
+});
+
+test("with no declared balance the charges total is all there is", () => {
+  const rows: CsvRow[] = [
+    { date: "2026-07-01 12:00:00", account: "Meli", amount: "-307.08", category: "Others", note: "", payee: "" },
+  ];
+  const verdict = weighTotals(rows, 32708, null);
+  assert.match(verdict.blocking ?? "", /faltan \$20\.00/);
+  assert.equal(verdict.note, null);
 });

@@ -36,6 +36,17 @@ export interface OwnCounterparty {
    * transfer to itself.
    */
   covers: string[];
+  /**
+   * Whether the pattern alone is enough, or the movement must also be the
+   * holder's own.
+   *
+   * A bank name is not evidence of whose money it is: anyone can bank at BBVA,
+   * and Banorte débito's July carried two SPEIs to a `Marlene Miriam Vazquez
+   * Peña` at BBVA that the bank-name rule claimed as internal transfers. A
+   * sponsor rail that serves exactly one product is different — money from
+   * DolarApp's operating company can only be the user's own DolarApp balance.
+   */
+  requiresHolder: boolean;
   /** Why this pattern means what it means, for whoever edits this table next. */
   because: string;
 }
@@ -52,23 +63,26 @@ export const OWN_COUNTERPARTIES: OwnCounterparty[] = [
     match: /arcus\s*fi|sent from arq|pier\s*5|d[óo]lar\s?app|\barq\b/i,
     account: "DolarApp",
     covers: ["DolarApp"],
+    requiresHolder: false,
     because:
       "BBVA prints DolarApp's sponsor bank and legal name: 'SPEI RECIBIDO ARCUS FI / Sent from ARQ / PIER 5, S.A de C.V.'",
   },
-  { match: /\bmifel\b/i, account: "MIFEL", covers: ["MIFEL"], because: "BBVA prints 'SPEI ENVIADO MIFEL'" },
+  { match: /\bmifel\b/i, account: "MIFEL", covers: ["MIFEL"], requiresHolder: true, because: "BBVA prints 'SPEI ENVIADO MIFEL'" },
   {
     match: /\bfinsus\b/i,
     account: "FinSus",
     covers: ["FinSus"],
+    requiresHolder: true,
     because: "FinSus names itself on the leg that leaves it: '22-jun SPEI ENVIADO Transferencia de Marco'",
   },
-  { match: /\bklar\b/i, account: "Klar", covers: ["Klar"], because: "Klar's statement names itself" },
-  { match: /bbva|bancomer/i, account: "Bancomer", covers: ["Bancomer"], because: "BBVA México is the Wallet account 'Bancomer'" },
-  { match: /\buala\b|\bualá\b/i, account: "Uala", covers: ["Uala"], because: "Ualá prints its own name" },
+  { match: /\bklar\b/i, account: "Klar", covers: ["Klar"], requiresHolder: true, because: "Klar's statement names itself" },
+  { match: /bbva|bancomer/i, account: "Bancomer", covers: ["Bancomer"], requiresHolder: true, because: "BBVA México is the Wallet account 'Bancomer'" },
+  { match: /\buala\b|\bualá\b/i, account: "Uala", covers: ["Uala"], requiresHolder: true, because: "Ualá prints its own name" },
   {
     match: /mercado\s?pago|\bmercadopago\b|merpago/i,
     account: UNRESOLVED,
     covers: ["Mercado pago", "Meli"],
+    requiresHolder: true,
     because:
       "Mercado Pago holds two Wallet accounts — 'Mercado pago' (balance) and 'Meli' (card). The description does not say which",
   },
@@ -76,6 +90,7 @@ export const OWN_COUNTERPARTIES: OwnCounterparty[] = [
     match: /\bbanorte\b/i,
     account: UNRESOLVED,
     covers: ["Banorte", "Banorte débito"],
+    requiresHolder: true,
     because:
       "Banorte holds two Wallet accounts — 'Banorte débito' and 'Banorte' (credit). A SPEI could be a transfer or a card payment",
   },
@@ -83,6 +98,7 @@ export const OWN_COUNTERPARTIES: OwnCounterparty[] = [
     match: /\bnu\s?bank\b|\bnu\b(?!\w)/i,
     account: UNRESOLVED,
     covers: ["NuBank Débito", "Nu crédito"],
+    requiresHolder: true,
     because: "Nu holds two Wallet accounts — 'NuBank Débito' and 'Nu crédito'",
   },
 ];
@@ -142,24 +158,53 @@ export function namesHolder(text: string, holder: string | undefined): boolean {
  * through the same rail ("OCTAVIO ROA SAAVEDRA"). With no holder configured
  * the requirement cannot be tested and the row is held anyway.
  */
-export function ownAccountFor(
-  text: string,
-  self: string,
-  holder: string | undefined = statementHolder()
-): string | null {
+export interface OwnLookup {
+  /** The name the banks print for the account holder. Defaults to `STATEMENT_HOLDER`. */
+  holder?: string;
+  /**
+   * The counterparty the extractor distilled from the movement, when there was
+   * one. Empty, or naming a rail rather than a person, means the statement
+   * named nobody — which is not the same as naming somebody else.
+   */
+  payee?: string;
+}
+
+/** Names that identify a wire or a bank, never the party at the other end. */
+const RAIL_NAMES = /^(stp|spei|clabe|banco|banorte|bbva|bancomer|banamex|klar|mifel|finsus|nu|nubank|mercado ?pago|arq|dolarapp|transferencia|abono|dep[óo]sito)s?$/i;
+
+export function ownAccountFor(text: string, self: string, opts: OwnLookup | string = {}): string | null {
+  const { holder = statementHolder(), payee } = typeof opts === "string" ? { holder: opts, payee: undefined } : opts;
   if (!text) return null;
   for (const entry of OWN_COUNTERPARTIES) {
     if (entry.covers.includes(self)) continue;
     if (!entry.match.test(text)) continue;
-    if (entry.account === UNRESOLVED && holder && !namesHolder(text, holder)) continue;
+    if (entry.requiresHolder && !isHolders(text, payee, holder)) continue;
     return entry.account;
   }
   return null;
 }
 
+/**
+ * Whether a movement matched by a bank name is the holder's own money.
+ *
+ * Three answers, and the middle one is the whole point. Banorte débito's July
+ * carries `SPEI RECIBIDO, BCO:0012 BBVA MEXICO ... DEL CLIENTE MARCO ANTONIO
+ * MAYEN HERNANDEZ` — his. It also carries `COMPRA ORDEN DE PAGO SPEI ...
+ * BCO:012 BENEF:Marlene Miriam Vazquez Peña` — not his, however much the word
+ * BBVA appears. And BBVA's own `SPEI RECIBIDO STP` names nobody at all, which
+ * is not evidence of a third party and so is held rather than written.
+ */
+function isHolders(text: string, payee: string | undefined, holder: string | undefined): boolean {
+  if (namesHolder(`${text} ${payee ?? ""}`, holder)) return true;
+  const named = payee?.trim();
+  // Nobody named: unknown, and unknown waits.
+  if (!named || RAIL_NAMES.test(named)) return true;
+  return false;
+}
+
 /** True when the counterparty is yours, whether or not it could be named. */
-export function isOwnCounterparty(text: string, self: string, holder?: string): boolean {
-  return ownAccountFor(text, self, holder ?? statementHolder()) !== null;
+export function isOwnCounterparty(text: string, self: string, opts: OwnLookup | string = {}): boolean {
+  return ownAccountFor(text, self, opts) !== null;
 }
 
 /** How the hold reads in the report. */

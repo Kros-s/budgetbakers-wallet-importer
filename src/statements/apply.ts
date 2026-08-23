@@ -16,7 +16,7 @@ import type { CsvRow } from "../csv.js";
 import { TRANSFER_CATEGORY, crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
 import { splitForWriting } from "./installments.js";
 import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
-import { isTransferRow } from "./write-policy.js";
+import { counterpartyText, isTransferRow } from "./write-policy.js";
 
 /** How far apart a statement row and a Wallet record may be and still be the same movement. */
 export const MATCH_SLACK_DAYS = 5;
@@ -221,7 +221,7 @@ export function planMonth(
     // DolarApp worth $285,876.01 whose other leg is in a currency no
     // equal-amount rule can reach; with every statement in, they would have
     // been written as income all the same.
-    const own = ownAccountFor([row.desc, row.payee].filter(Boolean).join(" "), account);
+    const own = ownAccountFor(counterpartyText(row), account, { payee: row.payee });
     if (own) {
       planned.push({ account, row, disposition: "hold", reason: describeOwnCounterparty(own) });
       continue;

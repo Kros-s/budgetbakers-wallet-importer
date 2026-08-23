@@ -55,26 +55,54 @@ test("MIFEL, FinSus and Klar name themselves and resolve to one account each", (
 
 const HOLDER = "MARCO ANTONIO MAYEN HERNANDEZ";
 
-test("an unresolved issuer holds only when the movement names the holder", () => {
+test("a bank name holds only when the movement is the holder's own", () => {
   // Both arrived in Bancomer through Mercado Pago on consecutive days. One is
   // the user moving his own money; the other is a debtor repaying him. The rail
-  // is identical, the ordering party is not.
+  // is identical, the party at the other end is not.
   const mine = "SPEI RECIBIDO Mercado Pago 3394119MERCADO*PAGO CPO167334871452 MARCO ANTONIO MAYEN HERNANDEZ";
   const theirs = "SPEI RECIBIDO Mercado Pago 9671664Abono parcial 27 de 48 CPO166674076541 OCTAVIO ROA SAAVEDRA";
-  assert.equal(ownAccountFor(mine, "Bancomer", HOLDER), UNRESOLVED);
-  assert.equal(ownAccountFor(theirs, "Bancomer", HOLDER), null);
+  assert.equal(ownAccountFor(mine, "Bancomer", { holder: HOLDER, payee: "Marco Antonio Mayen Hernandez" }), UNRESOLVED);
+  assert.equal(ownAccountFor(theirs, "Bancomer", { holder: HOLDER, payee: "Octavio Roa Saavedra" }), null);
 });
 
-test("an issuer that resolves to one account needs no holder name", () => {
-  // Nobody else sends the user money through DolarApp's sponsor bank, and the
-  // ordering party it prints is a company, not him.
-  assert.equal(ownAccountFor(ARQ_LINE, "Bancomer", HOLDER), "DolarApp");
+test("a bank name is not evidence of whose money it is", () => {
+  // Banorte débito's July: two SPEIs to a third party who banks at BBVA, which
+  // the bank-name rule claimed as internal transfers to Bancomer.
+  const toMarlene =
+    "COMPRA ORDEN DE PAGO SPEI 0260615 =REFERENCIA CTA/CLABE: 012180015169092289, BXI " +
+    "SPEI BCO:012 BENEF:Marlene Miriam Vazquez Peña";
+  assert.equal(
+    ownAccountFor(toMarlene, "Banorte débito", { holder: HOLDER, payee: "Marlene Miriam Vazquez Peña" }),
+    null
+  );
+  // The same statement's inflow from his own BBVA account, which does name him.
+  const fromHim = "2026061540012NNNN0000465284 SPEI RECIBIDO, BCO:0012 BBVA MEXICO HR LIQ: 03:33:36 DEL CLIENTE MARCO ANTONIO MAYEN HERNANDEZ";
+  assert.equal(ownAccountFor(fromHim, "Banorte débito", { holder: HOLDER, payee: "Bancomer" }), "Bancomer");
 });
 
-test("with no holder configured an unresolved issuer still holds", () => {
-  // Missing configuration must fail towards holding, never towards writing.
+test("a movement that names nobody is held, not written", () => {
+  // Naming nobody is not evidence of a third party. BBVA's `SPEI RECIBIDO STP`
+  // named no sender at all and was $10,155.21 of the user's own money.
+  const anonymous = "SPEI RECIBIDO Mercado Pago 0260622 Referencia 0126700458";
+  assert.equal(ownAccountFor(anonymous, "Bancomer", { holder: HOLDER, payee: "" }), UNRESOLVED);
+  assert.equal(ownAccountFor(anonymous, "Bancomer", { holder: HOLDER, payee: "Mercado Pago" }), UNRESOLVED);
+});
+
+test("a sponsor rail that serves one product needs no holder name", () => {
+  // Money from DolarApp's operating company can only be the user's own DolarApp
+  // balance, and the ordering party it prints is that company, not him.
+  assert.equal(
+    ownAccountFor(ARQ_LINE, "Bancomer", { holder: HOLDER, payee: "PIER 5, S.A de C.V." }),
+    "DolarApp"
+  );
+});
+
+test("with no holder configured a named third party is still not yours", () => {
+  // The holder test cannot run, but a payee that names somebody is evidence on
+  // its own — and one that names nobody still holds.
   const theirs = "SPEI RECIBIDO Mercado Pago OCTAVIO ROA SAAVEDRA";
-  assert.equal(ownAccountFor(theirs, "Bancomer", undefined), UNRESOLVED);
+  assert.equal(ownAccountFor(theirs, "Bancomer", { payee: "Octavio Roa Saavedra" }), null);
+  assert.equal(ownAccountFor(theirs, "Bancomer", { payee: "" }), UNRESOLVED);
 });
 
 test("the holder is recognised through a truncated name, and a stranger is not", () => {

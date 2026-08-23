@@ -43,9 +43,10 @@ import { loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../statements/period.js";
-import { chargesMismatch, netMismatch, parseDeclaredCharges, parseDeclaredNet } from "../statements/extraction.js";
+import { parseDeclaredCharges, parseDeclaredNet, weighTotals } from "../statements/extraction.js";
 import { describeIgnored } from "../statements/installments.js";
 import { describeCash } from "../statements/cash.js";
+import type { ExtractionVerdict } from "../statements/extraction.js";
 import { describeHeld, planWrites } from "../statements/write-policy.js";
 import { toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
@@ -181,12 +182,14 @@ async function reconcile(
   ctx: ReconcileCtx,
   rows: CsvRow[],
   declared: { from: string; to: string } | null,
-  chargeWarn: string | null
+  totals: ExtractionVerdict
 ): Promise<void> {
   const { config, couch, lookup, accountId } = ctx;
-  if (chargeWarn) {
-    console.warn(`⚠️ Cuadre contra el estado: ${chargeWarn}.`);
+  if (totals.blocking) {
+    console.warn(`⚠️ Cuadre contra el estado: ${totals.blocking}.`);
     console.warn(`   NO uses --write hasta resolverlo: escribiría un mes incompleto.`);
+  } else if (totals.note) {
+    console.log(`ℹ️ ${totals.note}.`);
   }
 
   // ── Diff vs Wallet ──
@@ -281,9 +284,9 @@ async function reconcile(
     return;
   }
 
-  if (chargeWarn) {
+  if (totals.blocking) {
     throw new Error(
-      `El extracto no cuadra contra los totales del estado (${chargeWarn}). ` +
+      `El extracto no cuadra contra los totales del estado (${totals.blocking}). ` +
         `--write escribiría un mes incompleto; corrige la extracción primero.`
     );
   }
@@ -383,10 +386,18 @@ async function main() {
       throw new Error(`No hay extracción guardada en ${ledgerPath}. Corre primero sin --from-ledger.`);
     }
     const stored = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as {
-      rows: CsvRow[]; period: { from: string; to: string } | null; chargesDeclared?: number | null;
+      rows: CsvRow[];
+      period: { from: string; to: string } | null;
+      chargesDeclared?: number | null;
+      // Both totals, or the replay weighs the charges gap without the balance
+      // movement that explains it and refuses a month that is right to the cent.
+      netDeclared?: number | null;
     };
     console.log(`Reutilizando la extracción guardada: ${stored.rows.length} movimiento(s) de ${ledgerPath}`);
-    await reconcile(args, ctx, stored.rows, stored.period, chargesMismatch(stored.rows, stored.chargesDeclared ?? null));
+    await reconcile(
+      args, ctx, stored.rows, stored.period,
+      weighTotals(stored.rows, stored.chargesDeclared ?? null, stored.netDeclared ?? null)
+    );
     return;
   }
 
@@ -419,9 +430,7 @@ async function main() {
   // cannot satisfy by being self-consistent.
   // Two balances, and the second is the stronger one: charges can balance while
   // the extraction is entirely wrong about which movements exist.
-  const chargeWarn =
-    chargesMismatch(rows, parseDeclaredCharges(result.text)) ??
-    netMismatch(rows, parseDeclaredNet(result.text));
+  const totals = weighTotals(rows, parseDeclaredCharges(result.text), parseDeclaredNet(result.text));
   const declared = parsePeriodLine(result.text);
 
   // ── Persist normalized statement ledger ──
@@ -435,7 +444,7 @@ async function main() {
   }, null, 2));
   console.log(`Ledger del estado: ${ledgerPath}`);
 
-  await reconcile(args, ctx, rows, declared, chargeWarn);
+  await reconcile(args, ctx, rows, declared, totals);
 
 }
 
