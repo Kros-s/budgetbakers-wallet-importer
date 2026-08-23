@@ -212,10 +212,17 @@ function isHolders(
   const named = payee?.trim();
   // Nobody named: unknown, and unknown waits.
   if (!named || RAIL_NAMES.test(named)) return true;
-  // The counterparty IS the institution, however the statement dressed it up.
-  // Mercado Pago prints `Transferencia enviada UALA MARCO` for money going to
-  // the user's own Ualá account: a payee naming Ualá is not a stranger who
-  // happens to bank there, and reading it as one wrote $6,000 as an expense.
+  // A card-network merchant descriptor, never an account. The asterisk is the
+  // convention for "this acquirer, processing for that shop" — `MERPAGO*KALAG`,
+  // `PAYPAL *ROBLOXCORPO`, `STR*AMAZON`, `CONEKTA*BUHOCONTABLE` all appear on
+  // these statements, and MERPAGO*KALAG is a $750 charge at a shop, not money
+  // moving to the user's own Mercado Pago balance.
+  if (named.includes("*")) return false;
+  // Otherwise the counterparty IS the institution, however the statement
+  // dressed it up. Mercado Pago prints `Transferencia enviada UALA MARCO` for
+  // money going to the user's own Ualá account: a payee naming Ualá is not a
+  // stranger who happens to bank there, and reading it as one wrote $6,000 as
+  // an ordinary expense.
   if (entry.match.test(named)) return true;
   return false;
 }

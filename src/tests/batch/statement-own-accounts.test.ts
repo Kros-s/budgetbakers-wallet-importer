@@ -154,3 +154,21 @@ test("a payee that names the institution is not a stranger who banks there", () 
     null
   );
 });
+
+test("an acquirer processing for a shop is not the shop's bank account", () => {
+  // `MERPAGO*KALAG` is a $750 charge at a shop that takes Mercado Pago, not
+  // money moving to the user's own Mercado Pago balance. The asterisk is the
+  // card-network convention for exactly that — `PAYPAL *ROBLOXCORPO`,
+  // `STR*AMAZON`, `CONEKTA*BUHOCONTABLE` all appear on these statements.
+  assert.equal(
+    ownAccountFor("MERPAGO*KALAG CIUDAD DE MEX MX MAG 2105031W3", "Banorte", {
+      holder: HOLDER, payee: "MERPAGO*KALAG CIUDAD DE MEX MX MAG 2105031W3",
+    }),
+    null
+  );
+  // The plain institution still resolves.
+  assert.equal(
+    ownAccountFor("Transferencia enviada UALA MARCO", "Mercado pago", { holder: HOLDER, payee: "Uala Marco" }),
+    "Uala"
+  );
+});

@@ -39,7 +39,7 @@ import {
 } from "../statements/reconcile-core.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
 import { ledgerPath as ledgerPathFor, loadLedger } from "../statements/ledgers.js";
-import { loadRegistry } from "../statements/registry.js";
+import { addMonths, loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../statements/period.js";
@@ -86,19 +86,29 @@ function parseArgs(argv: string[]): Args {
 
 
 /**
- * Every other account's statement for this month, in the crossing's shape.
+ * Every other account's statement around this month, in the crossing's shape.
  *
  * A statement is read one at a time, but a transfer is not: its other leg is in
  * a document that may already be on disk and not yet in Wallet. Reading the
  * siblings costs a few file reads and turns "write this now" into "wait for the
  * crossing" exactly where it should.
+ *
+ * The neighbouring months are read too, and that is not caution — it is the
+ * only way the pair can be found. A month label is not a date range: FinSus
+ * sent $10,155.21 to Bancomer on 22-jun, which is in FinSus's JUNE statement
+ * and in Bancomer's JULY one, because Bancomer cuts on the 16th. Reading only
+ * the matching label left each leg looking for a counterpart that was on disk
+ * the whole time, one file over.
  */
 function siblingLedgerRows(account: string, month: string): LedgerRow[] {
   const rows: LedgerRow[] = [];
+  const months = [addMonths(month, -1), month, addMonths(month, 1)];
   for (const other of Object.keys(loadRegistry())) {
     if (other === account) continue;
-    const led = loadLedger(other, month);
-    if (led) rows.push(...toLedgerRows(other, led.rows));
+    for (const m of months) {
+      const led = loadLedger(other, m);
+      if (led) rows.push(...toLedgerRows(other, led.rows));
+    }
   }
   return rows;
 }

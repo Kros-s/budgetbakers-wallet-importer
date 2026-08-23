@@ -110,7 +110,7 @@ function monthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function addMonths(month: string, n: number): string {
+export function addMonths(month: string, n: number): string {
   const [y, m] = month.split("-").map(Number);
   const d = new Date(y, m - 1 + n, 1);
   return monthKey(d);
