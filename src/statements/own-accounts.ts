@@ -88,25 +88,78 @@ export const OWN_COUNTERPARTIES: OwnCounterparty[] = [
 ];
 
 /**
+ * The account holder's name, for telling your own money from someone else's.
+ *
+ * Set `STATEMENT_HOLDER` to the name as the banks print it. Unset, the
+ * unresolved patterns below hold every movement they touch, which is noisy but
+ * never wrong in the dangerous direction.
+ */
+export function statementHolder(): string | undefined {
+  return process.env.STATEMENT_HOLDER?.trim() || undefined;
+}
+
+function tokens(name: string): string[] {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+}
+
+/**
+ * Whether this movement names the account holder rather than somebody else.
+ *
+ * Three of the holder's name parts have to appear, or all of them when the name
+ * is shorter than that. Statements truncate — "MARCO ANTONIO MAYEN" for
+ * "MARCO ANTONIO MAYEN HERNANDEZ" — so demanding the whole name fails on the
+ * user's own transfers, while one part in common would make any stranger who
+ * shares a first name look like him.
+ */
+export function namesHolder(text: string, holder: string | undefined): boolean {
+  if (!holder) return false;
+  const wanted = tokens(holder);
+  if (wanted.length === 0) return false;
+  const present = new Set(tokens(text));
+  const hits = wanted.filter((t) => present.has(t)).length;
+  return hits >= Math.min(3, wanted.length);
+}
+
+/**
  * Which of your accounts is on the other side of this movement, if any.
  *
  * `self` is the account whose statement this is. Any entry that could denote it
  * is skipped rather than matched: a statement names its own issuer on every
  * page, and a movement resolving to the account it was read from is not a
  * transfer, it is the statement's letterhead.
+ *
+ * An entry that resolves to a single account is evidence on its own — nobody
+ * else sends the user money through DolarApp's sponsor bank. An UNRESOLVED one
+ * is not: it matched a payment rail, and anybody can pay you from Banorte or
+ * through Mercado Pago. So those additionally require the movement to name the
+ * holder, which is exactly what separates his $5,000 from Mercado Pago
+ * ("MARCO ANTONIO MAYEN HERNANDEZ") from the $2,784 a debtor repaid him
+ * through the same rail ("OCTAVIO ROA SAAVEDRA"). With no holder configured
+ * the requirement cannot be tested and the row is held anyway.
  */
-export function ownAccountFor(text: string, self: string): string | null {
+export function ownAccountFor(
+  text: string,
+  self: string,
+  holder: string | undefined = statementHolder()
+): string | null {
   if (!text) return null;
   for (const entry of OWN_COUNTERPARTIES) {
     if (entry.covers.includes(self)) continue;
-    if (entry.match.test(text)) return entry.account;
+    if (!entry.match.test(text)) continue;
+    if (entry.account === UNRESOLVED && holder && !namesHolder(text, holder)) continue;
+    return entry.account;
   }
   return null;
 }
 
 /** True when the counterparty is yours, whether or not it could be named. */
-export function isOwnCounterparty(text: string, self: string): boolean {
-  return ownAccountFor(text, self) !== null;
+export function isOwnCounterparty(text: string, self: string, holder?: string): boolean {
+  return ownAccountFor(text, self, holder ?? statementHolder()) !== null;
 }
 
 /** How the hold reads in the report. */

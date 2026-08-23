@@ -25,16 +25,12 @@
  */
 
 import type { CsvRow } from "../csv.js";
+import { TRANSFER_CATEGORY } from "./crossing.js";
 
 /** The Wallet account that holds physical cash. */
 export const CASH_ACCOUNT = "Wallet";
 
-/**
- * The category both legs carry. `convertRows` links a pair only when both sides
- * resolve to the transfer category, share an identical date string and carry
- * equal amounts of opposite sign — all four are arranged here on purpose.
- */
-export const TRANSFER_CATEGORY = "Transfer, withdraw";
+export { TRANSFER_CATEGORY };
 
 /** The statement's own marker, set by the extractor — never guessed from the text. */
 export function isCashWithdrawal(row: CsvRow): boolean {

@@ -75,6 +75,15 @@ export interface CrossResult {
   unpaired: LedgerRow[];
 }
 
+/**
+ * The category spelling both legs of a transfer must carry.
+ *
+ * `convertRows` links a pair only when both sides resolve to Wallet's transfer
+ * category, so a leg restated to anything else is written as a standalone
+ * movement no matter what the crossing decided about it.
+ */
+export const TRANSFER_CATEGORY = "Transfer, withdraw";
+
 function isTransferRow(r: LedgerRow): boolean {
   return /transfer|traspaso/i.test(r.category);
 }

@@ -183,9 +183,10 @@ function describeExisting(hit: WalletRecord): string {
 }
 
 function inspectCandidate(entry: GuardedRecord, names: Record<string, string>): InspectedRecord {
-  const { id, record } = entry;
+  const { id, record, row } = entry;
   return {
     id,
+    description: row.desc,
     amountCents: record.amount,
     type: record.type,
     // Either field means "transfer". `convertRows` sets the boolean, but a

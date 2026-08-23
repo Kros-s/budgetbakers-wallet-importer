@@ -35,6 +35,16 @@ export interface InspectedRecord {
   note?: string;
   /** ISO timestamp. */
   recordDate: string;
+  /**
+   * The movement as its statement printed it, reference block and all.
+   *
+   * `payee` is a cleaned-up name and often loses the very words that give a
+   * movement away. BBVA's `SPEI RECIBIDO STP` arrived from an account of the
+   * user's whose name the statement never printed, and reached Wallet as
+   * income from a payee called "STP" — nothing in which reads as a transfer.
+   * Empty for records that came from anywhere but a statement.
+   */
+  description?: string;
 }
 
 export interface PendingQuestion {
@@ -50,7 +60,8 @@ export type FindingKind =
   | "verdict-filed-as-question"
   | "duplicate-question"
   | "question-may-be-recorded"
-  | "large-non-transfer";
+  | "large-non-transfer"
+  | "inflow-without-counterparty";
 
 export interface IntegrityFinding {
   /** "alert" = almost certainly wrong. "review" = worth a human glance. */
@@ -71,11 +82,29 @@ const TRANSFER_CATEGORIES = ["transfer, withdraw", "transfer", "traspaso"];
  */
 const TRANSFER_WORDS = /\b(retiro|traspaso|transferencia|spei|entre cuentas|cuenta propia)\b/i;
 
+/**
+ * Names that identify a payment rail or a clearing house, never a counterparty.
+ *
+ * A statement that prints one of these as the sender printed nothing at all:
+ * BBVA's `SPEI RECIBIDO STP` was $10,155.21 arriving from the user's own FinSus
+ * account, and reached Wallet as income from a payee called "STP". SPEI itself
+ * is not on this list and must not be — every wire in Mexico travels on it,
+ * including every genuine payment from a client, so treating the word as a
+ * signal flags six ordinary rows to catch one.
+ */
+const PAYMENT_RAILS = /^(stp|spei|clabe|banco|banxico|transferencia|abono|dep[óo]sito|interbancari[oa])s?$/i;
+
 /** How far apart the two legs of one transfer may be recorded. */
 const COUNTERPART_SLACK_MS = 48 * 60 * 60 * 1000;
 
 const isTransferCategory = (name?: string) =>
   !!name && TRANSFER_CATEGORIES.includes(name.trim().toLowerCase());
+
+/** Whether the statement named a sender at all, as opposed to naming the wire. */
+const namesSomebody = (r: InspectedRecord): boolean => {
+  const payee = r.payee?.trim();
+  return !!payee && !PAYMENT_RAILS.test(payee);
+};
 
 /** Every peso amount mentioned in a question, in cents. */
 export function amountsInText(text: string): number[] {
@@ -116,7 +145,8 @@ export function checkRunIntegrity(input: IntegrityInput): IntegrityFinding[] {
   const pool = input.windowRecords?.length ? input.windowRecords : written;
   const findings: IntegrityFinding[] = [];
   const money = (cents: number) => `$${(cents / 100).toLocaleString("es-MX", { minimumFractionDigits: 2 })}`;
-  const describe = (r: InspectedRecord) => r.payee?.trim() || r.note?.trim() || r.id;
+  const describe = (r: InspectedRecord) =>
+    r.payee?.trim() || r.description?.trim().slice(0, 60) || r.note?.trim() || r.id;
 
   for (const r of written) {
     // The $323,000 case: filed under a transfer category, but not linked, so
@@ -143,6 +173,21 @@ export function checkRunIntegrity(input: IntegrityInput): IntegrityFinding[] {
         kind: "orphan-transfer-leg",
         recordId: r.id,
         message: `${money(r.amountCents)} en "${describe(r)}" es media transferencia: falta la contraparte.`,
+      });
+    }
+
+    // Money arriving that the statement could not attribute to anybody. It may
+    // be a client paying by wire, or it may be another of the user's own
+    // accounts whose name the sending bank never printed — from this side there
+    // is no telling, and the second reading is the expensive one. Only raised
+    // where a description exists to have been silent, so this stays quiet on
+    // every path that does not come from a statement.
+    if (!r.transfer && r.type === 0 && r.description && !namesSomebody(r)) {
+      findings.push({
+        severity: "review",
+        kind: "inflow-without-counterparty",
+        recordId: r.id,
+        message: `${money(r.amountCents)} entró sin que el estado nombrara quién lo envió ("${r.description.trim().slice(0, 60)}"): puede ser de otra cuenta tuya.`,
       });
     }
 

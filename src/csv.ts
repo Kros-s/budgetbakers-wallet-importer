@@ -352,6 +352,29 @@ interface TransferLeg {
   accountId: string;
   /** The account as the CSV named it, for the skip reason. */
   accountName: string;
+  /**
+   * Unsigned cents in the local currency, when the account is held in another
+   * one and the statement published both figures.
+   *
+   * The two legs of a cross-currency transfer never carry the same number:
+   * DolarApp records 9,300 USD for the movement Bancomer records as
+   * 163,202.91 MXN. Bucketing on the face amount puts them in different
+   * buckets, so both are left over and neither is written. The peso figure the
+   * statement prints beside the dollar one is the only thing they share.
+   */
+  pesos?: number;
+}
+
+/**
+ * The statement's local-currency figure as unsigned cents, or undefined when it
+ * published none. The sign lives in `type`, exactly as it does for `amount`.
+ */
+function localAmount(mxn: string | undefined): number | undefined {
+  const raw = mxn?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw.replace(/,/g, "").replace(/[^0-9.-]/g, ""));
+  if (!Number.isFinite(value) || value === 0) return undefined;
+  return Math.round(Math.abs(value) * 100);
 }
 
 /** A leg that found no counterpart, and why. */
@@ -398,7 +421,11 @@ function linkTransferPairs(records: NewRecord[], legs: TransferLeg[]): UnpairedL
   // usable counterpart always wins, so the same CSV always pairs the same way.
   const buckets = new Map<string, TransferLeg[]>();
   for (const leg of legs) {
-    const key = `${leg.dateKey}|${leg.amount}`;
+    // The local-currency figure when there is one, the face amount otherwise —
+    // a peso account's face amount already IS its peso figure, so the two sides
+    // of a cross-currency transfer land in the same bucket and a same-currency
+    // pair behaves exactly as before.
+    const key = `${leg.dateKey}|${leg.pesos ?? leg.amount}`;
     const bucket = buckets.get(key);
     if (bucket) bucket.push(leg);
     else buckets.set(key, [leg]);
@@ -589,6 +616,7 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
         type,
         accountId,
         accountName: row.account.trim(),
+        pesos: localAmount(row.mxn),
       });
     }
 

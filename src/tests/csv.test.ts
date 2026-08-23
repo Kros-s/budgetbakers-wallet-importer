@@ -333,3 +333,53 @@ test("rowsToCsv keeps the statement columns", () => {
   assert.equal(back.opdate, "2026-06-04");
   assert.equal(back.desc, "MERPAGO*SAMSUNG 001 de 006");
 });
+
+test("the two legs of a cross-currency transfer link on the published peso figure", () => {
+  // DolarApp records 9,300 USD for the movement Bancomer records as
+  // 163,202.91 MXN. Bucketing on the face amount puts them in different
+  // buckets, so both were left over and neither was written.
+  const maps: LookupMaps = {
+    accounts: { DolarApp: "-Account_usd", Bancomer: "-Account_mxn" },
+    accountCurrencies: { DolarApp: "-Currency_usd", Bancomer: "-Currency_mxn" },
+    categories: { "Transfer, withdraw": "-Category_transfer" },
+    currencies: { USD: "-Currency_usd", MXN: "-Currency_mxn" },
+    transferCategoryId: "-Category_transfer",
+    labels: {},
+  };
+  const { records, skipped } = convertRows([
+    {
+      date: "2026-07-01 12:00:00", account: "DolarApp", amount: "-9300.00",
+      category: "Transfer, withdraw", note: "", payee: "Marco Mayen", mxn: "-163202.91",
+    },
+    {
+      date: "2026-07-01 12:00:00", account: "Bancomer", amount: "163202.91",
+      category: "Transfer, withdraw", note: "", payee: "PIER 5, S.A de C.V.",
+    },
+  ], maps);
+  assert.equal(skipped.length, 0);
+  assert.equal(records.length, 2);
+  assert.ok(records[0].transferId);
+  assert.equal(records[0].transferId, records[1].transferId);
+  // Each leg keeps the amount its own account is denominated in.
+  assert.equal(records[0].amount, 930000);
+  assert.equal(records[1].amount, 16320291);
+});
+
+test("without a published equivalent the cross-currency legs are left unpaired", () => {
+  // The rate is not ours to invent, and two amounts that have nothing to do
+  // with each other must not be linked on a shared date.
+  const maps: LookupMaps = {
+    accounts: { DolarApp: "-Account_usd", Bancomer: "-Account_mxn" },
+    accountCurrencies: { DolarApp: "-Currency_usd", Bancomer: "-Currency_mxn" },
+    categories: { "Transfer, withdraw": "-Category_transfer" },
+    currencies: { USD: "-Currency_usd", MXN: "-Currency_mxn" },
+    transferCategoryId: "-Category_transfer",
+    labels: {},
+  };
+  const { records, skipped } = convertRows([
+    { date: "2026-07-01 12:00:00", account: "DolarApp", amount: "-9300.00", category: "Transfer, withdraw", note: "", payee: "" },
+    { date: "2026-07-01 12:00:00", account: "Bancomer", amount: "163202.91", category: "Transfer, withdraw", note: "", payee: "" },
+  ], maps);
+  assert.equal(records.length, 0);
+  assert.equal(skipped.length, 2);
+});

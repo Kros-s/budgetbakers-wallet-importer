@@ -216,3 +216,24 @@ test("planMonth still writes genuine income once the month is complete", () => {
   const plan = planMonth("2026-07", [{ account: "Bancomer", rows: [client] }], [], { coverageComplete: true });
   assert.equal(plan.planned[0].disposition, "write");
 });
+
+test("a paired leg is restated to the transfer category so the write can link it", () => {
+  // The crossing decides two rows are one movement; convertRows links them only
+  // if BOTH carry the transfer category. Bancomer's arrival from DolarApp was
+  // extracted as "Wage, invoices": paired here, written as income there.
+  const out = {
+    date: "2026-07-01 12:00:00", account: "DolarApp", amount: "-9300.00",
+    category: "Transfer, withdraw", note: "", payee: "Marco Mayen", mxn: "-163202.91",
+  };
+  const into = {
+    date: "2026-07-01 12:00:00", account: "Bancomer", amount: "163202.91",
+    category: "Wage, invoices", note: "", payee: "PIER 5, S.A de C.V.",
+  };
+  const plan = planMonth("2026-07", [
+    { account: "DolarApp", rows: [out] },
+    { account: "Bancomer", rows: [into] },
+  ], [], { coverageComplete: true });
+  const paired = plan.planned.filter((p) => p.disposition === "pair");
+  assert.equal(paired.length, 2);
+  for (const p of paired) assert.equal(p.row.category, "Transfer, withdraw");
+});

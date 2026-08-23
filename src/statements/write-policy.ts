@@ -17,7 +17,7 @@ import type { CsvRow } from "../csv.js";
 import { splitForWriting } from "./installments.js";
 import { crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
 import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
-import { expandCashWithdrawals, isCashWithdrawal } from "./cash.js";
+import { CASH_ACCOUNT, expandCashWithdrawals, isCashWithdrawal } from "./cash.js";
 
 /** The categories Wallet uses for a transfer leg, in the spellings the extractor emits. */
 export function isTransferRow(row: CsvRow): boolean {
@@ -88,8 +88,15 @@ export function planWrites(
   const held: CsvRow[] = [];
   const heldReasons: string[] = [];
 
-  const byCategory = writable.filter(isTransferRow);
-  const rest = writable.filter((r) => !isTransferRow(r));
+  // Cash first, and ahead of the transfer-category hold. BBVA's withdrawals
+  // arrive categorised as a transfer AND marked as cash, and held on the
+  // category they would wait for a counterpart no statement will ever bring:
+  // the cash account issues none. Its counterpart is the leg written beside it.
+  const cash = writable.filter(isCashOut);
+  const writable2 = writable.filter((r) => !isCashOut(r));
+
+  const byCategory = writable2.filter(isTransferRow);
+  const rest = writable2.filter((r) => !isTransferRow(r));
   for (const row of byCategory) { held.push(row); heldReasons.push("categoría de traspaso"); }
 
   const hold = opts.account ? counterpartHold(rest, opts.account, opts.elsewhere ?? []) : new Map();
@@ -106,12 +113,12 @@ export function planWrites(
     const why = hold.get(row);
     if (why) { held.push(row); heldReasons.push(why); } else { now.push(row); }
   }
-  // Last, and only over what is actually being written: a withdrawal expanded
-  // before the holds above would arrive carrying a transfer category and be
-  // held for a counterpart that no statement will ever bring — the cash account
-  // does not issue one.
-  const cash = now.filter((r) => isCashWithdrawal(r) && parseFloat(r.amount) < 0);
-  return { now: expandCashWithdrawals(now), held, heldReasons, ignored, cash };
+  return { now: expandCashWithdrawals([...cash, ...now]), held, heldReasons, ignored, cash };
+}
+
+/** Money in cash leaving an account — the only shape with a leg to invent. */
+function isCashOut(row: CsvRow): boolean {
+  return isCashWithdrawal(row) && row.account !== CASH_ACCOUNT && parseFloat(row.amount) < 0;
 }
 
 /** Everything on a row that could name the account on the other side. */

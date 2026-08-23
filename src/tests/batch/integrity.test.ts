@@ -130,3 +130,41 @@ test("a transfer the iOS app linked is not reported as unflagged", () => {
   assert.equal(inspect({ transfer: true }), true, "web/importador: solo el booleano");
   assert.equal(inspect({}), false);
 });
+
+// ── Money arriving that the statement could not attribute ─────────────────
+
+const inflow = (over: Partial<InspectedRecord> = {}): InspectedRecord => ({
+  id: "pending-1", amountCents: 1015521, type: 0, transfer: false,
+  accountId: "-Account_bancomer", categoryName: "Others",
+  recordDate: "2026-06-22T12:00:00.000-06:00", ...over,
+});
+
+test("an inflow whose sender the statement never named is raised for review", () => {
+  // BBVA's `SPEI RECIBIDO STP`: $10,155.21 arriving from the user's own FinSus
+  // account, reaching Wallet as income from a payee called "STP".
+  const findings = checkRunIntegrity({
+    written: [inflow({ payee: "STP", description: "SPEI RECIBIDO STP 0260622 Referencia 0126700458 646" })],
+  });
+  assert.equal(findings.filter((f) => f.kind === "inflow-without-counterparty").length, 1);
+});
+
+test("an ordinary wire from a named third party is not raised", () => {
+  // Every wire in Mexico travels on SPEI, including every genuine client
+  // payment. Treating the word as a signal flags six rows to catch one.
+  const findings = checkRunIntegrity({
+    written: [inflow({
+      payee: "Luis Alberto Jimenez Casillas",
+      description: "SPEI RECIBIDOBANAMEX 0010726julio 2026 LUIS ALBERTO,JIMENEZ/CASILLAS",
+    })],
+  });
+  assert.equal(findings.filter((f) => f.kind === "inflow-without-counterparty").length, 0);
+});
+
+test("the check stays quiet where no statement was involved", () => {
+  // Email alerts carry no description, and this must not start firing on them.
+  const findings = checkRunIntegrity({ written: [inflow({ payee: "STP", description: undefined })] });
+  assert.equal(findings.filter((f) => f.kind === "inflow-without-counterparty").length, 0);
+  // Nor on money leaving: an expense nobody was named for is a purchase.
+  const out = checkRunIntegrity({ written: [inflow({ type: 1, payee: "", description: "COMPRA SIN NOMBRE" })] });
+  assert.equal(out.filter((f) => f.kind === "inflow-without-counterparty").length, 0);
+});

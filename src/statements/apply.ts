@@ -13,7 +13,7 @@
  */
 
 import type { CsvRow } from "../csv.js";
-import { crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
+import { TRANSFER_CATEGORY, crossTransfers, type LedgerRow, toLedgerRows } from "./crossing.js";
 import { splitForWriting } from "./installments.js";
 import { describeOwnCounterparty, ownAccountFor } from "./own-accounts.js";
 import { isTransferRow } from "./write-policy.js";
@@ -182,8 +182,15 @@ export function planMonth(
   for (const { account, row, led } of outstanding) {
     const other = partner.get(led);
     if (other) {
+      // Both legs are restated to the transfer category, and it matters: the
+      // crossing decides two rows are one movement, but `convertRows` links
+      // them only if BOTH carry that category. Bancomer's arrival from DolarApp
+      // was extracted as "Wage, invoices" — paired here and written as income
+      // there, with its partner written as a lone withdrawal.
       planned.push({
-        account, row, disposition: "pair",
+        account,
+        row: isTransferRow(row) ? row : { ...row, category: TRANSFER_CATEGORY },
+        disposition: "pair",
         reason: `traspaso con ${byLed.get(other)?.account ?? "otra cuenta"}`,
         withAccount: byLed.get(other)?.account,
       });
