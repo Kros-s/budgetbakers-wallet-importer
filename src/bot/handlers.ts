@@ -71,10 +71,10 @@ import { countBy, formatPlan, writableRows } from "../statements/apply.js";
 import { loadMonth } from "../statements/month-runner.js";
 import { listRecordsByDateRange } from "../records.js";
 import {
-  alreadyInWallet, crossTransfers, deferNearBoundary, formatCrossing, orphanTransferLegs,
+  alreadyInWallet, crossTransfers, formatCrossing, orphanTransferLegs,
   toLedgerRows, toWalletRows,
 } from "../statements/crossing.js";
-import { calendarPeriod } from "../statements/period.js";
+import { formatAccountPeriods, splitAtAccountBoundary } from "../statements/month-window.js";
 import {
   formatReconcileSummary, needsAttention, parseReconcileOutput, reconcileCommand, runReconcile,
   SerialQueue,
@@ -961,12 +961,11 @@ export function registerHandlers(deps: HandlerDeps): void {
     // reads as a missing movement — which is the duplicate we are here to
     // avoid. It also makes a partial month useful: a leg can settle against
     // what is already booked even if its statement never comes.
-    const [y, m] = arg.split("-").map(Number);
-    const existing = await listRecordsByDateRange(
-      deps.couch,
-      new Date(y, m - 1, -3).toISOString(),
-      new Date(y, m, 4).toISOString()
-    );
+    // The window comes from each account's real statement period. The calendar
+    // month left Costco's first nineteen days crossed against records that were
+    // never fetched, and every one of them surfaced as an orphan.
+    const view = await loadMonth(arg, deps.couch, deps.lookup);
+    const existing = await listRecordsByDateRange(deps.couch, view.window.from, view.window.to);
     const namesById: Record<string, string> = {};
     for (const [name, id] of Object.entries(deps.lookup.accounts)) namesById[id] = name;
 
@@ -992,6 +991,9 @@ export function registerHandlers(deps: HandlerDeps): void {
       `🔀 *Cruce de ${arg}*`,
       `${coverage.have.length}/${coverage.have.length + coverage.missing.length} estados · ` +
         `${fromStatements.length} mov. de estados · ${fromWallet.length} ya en Wallet`,
+      "```",
+      formatAccountPeriods(view.periods),
+      "```",
       "",
       "```",
       totals,
@@ -1014,9 +1016,11 @@ export function registerHandlers(deps: HandlerDeps): void {
     // Rows at the edge of the month are held back on purpose. A movement made
     // at month end posts days later — 92% of Banamex's do, up to five — so it
     // lands on the next statement, whose account may not be extracted yet.
-    const { deferred } = deferNearBoundary(
+    // Judged against each account's own period, not against 1-jul/31-jul: the
+    // calendar edge deferred the wrong rows and let the risky ones through.
+    const { deferred } = splitAtAccountBoundary(
       result.unpaired.filter((r) => r.source === "statement"),
-      calendarPeriod(arg)
+      view.periods
     );
     if (deferred.length) {
       parts.push(

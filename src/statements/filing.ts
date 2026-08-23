@@ -17,6 +17,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { INBOX_DIR } from "./inbox.js";
+import { accountSlug, statementPdfName } from "./naming.js";
 
 export const ARRIVALS_LOG = path.resolve("data/statements/arrivals.jsonl");
 
@@ -41,21 +42,17 @@ export interface Arrival {
   via?: string;
 }
 
-function slug(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")   // "débito" and "debito" must not file apart
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+// One authority for how an account becomes a filename — three copies with two
+// conventions gave a single account a PDF, a ledger and a profile under three
+// different names.
+const slug = accountSlug;
 
 /**
  * The canonical name: account and month, which is what anyone looking for a
  * statement actually knows.
  */
 export function statementFileName(account: string, month: string, ext = ".pdf"): string {
-  return `${slug(account)}-${month}${ext}`;
+  return statementPdfName(account, month, ext);
 }
 
 /**

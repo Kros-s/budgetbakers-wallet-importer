@@ -43,12 +43,43 @@ export type Registry = Record<string, RegistryEntry>; // account name → entry
 
 const REGISTRY_PATH = path.resolve("data/statements/registry.json");
 
+const SEED_PATH = path.resolve("config/statements-registry.seed.json");
+
+/**
+ * Configuration comes from the committed seed; mutable state from the live file.
+ *
+ * `data/` is gitignored, so fourteen hand-verified cut days lived only on the
+ * container's disk. A fresh provision got an empty registry and swallowed it:
+ * the nightly nag never fired, /statements said the registry was empty, and
+ * /cross refused every month — all silently. An account present only in the
+ * live file is kept, never dropped, and `received` is left absent rather than
+ * emptied so a pre-`received` registry keeps its lastReceived fallback.
+ */
 export function loadRegistry(): Registry {
-  try {
-    return JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8")) as Registry;
-  } catch {
-    return {};
+  const read = (p: string): Registry => {
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf8")) as Registry;
+    } catch {
+      return {};
+    }
+  };
+  const seed = read(SEED_PATH);
+  const live = read(REGISTRY_PATH);
+  if (Object.keys(seed).length === 0) return live;
+
+  const merged: Registry = {};
+  for (const [account, cfg] of Object.entries(seed)) {
+    const state = live[account];
+    merged[account] = {
+      ...cfg,
+      lastReceived: state?.lastReceived ?? cfg.lastReceived ?? null,
+      ...(state?.received ? { received: state.received } : {}),
+    };
   }
+  for (const [account, entry] of Object.entries(live)) {
+    if (!merged[account]) merged[account] = entry;
+  }
+  return merged;
 }
 
 export function saveRegistry(reg: Registry): void {

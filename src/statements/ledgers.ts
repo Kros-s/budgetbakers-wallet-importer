@@ -13,6 +13,7 @@ import fs from "fs";
 import path from "path";
 import type { CsvRow } from "../csv.js";
 import { loadRegistry } from "./registry.js";
+import { accountSlug, ledgerFileName } from "./naming.js";
 
 export const LEDGER_DIR = path.resolve("data/statements");
 
@@ -26,12 +27,14 @@ export interface StoredLedger {
   rows: CsvRow[];
 }
 
-export function ledgerSlug(account: string): string {
-  return account.toLowerCase().replace(/\s+/g, "-");
-}
+// Accents stripped, like every other name the pipeline writes: this used to
+// keep them, so one account had a PDF under one spelling and its ledger under
+// another, and the filenames were sensitive to how macOS and Linux normalise
+// Unicode.
+export const ledgerSlug = accountSlug;
 
 export function ledgerPath(account: string, month: string): string {
-  return path.join(LEDGER_DIR, `ledger-${ledgerSlug(account)}-${month}.json`);
+  return path.join(LEDGER_DIR, ledgerFileName(account, month));
 }
 
 export function loadLedger(account: string, month: string): StoredLedger | null {

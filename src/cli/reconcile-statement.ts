@@ -33,6 +33,9 @@ import { listRecordsByDateRange, writeRecords } from "../records.js";
 import { CATALOG_PROMPT } from "../webhook/email-processor.js";
 import { markReceived } from "../statements/registry.js";
 import { retireStatement } from "../statements/inbox.js";
+import { bankProfileFileName } from "../statements/naming.js";
+import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
+import { ledgerPath as ledgerPathFor } from "../statements/ledgers.js";
 import { loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
@@ -87,13 +90,11 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
-function profileSlug(account: string): string {
-  return account.toLowerCase().replace(/\s+/g, "-");
-}
+
 
 function loadProfile(account: string): string {
   try {
-    return fs.readFileSync(path.resolve(`data/statements/profiles/${profileSlug(account)}.md`), "utf8");
+    return fs.readFileSync(path.resolve("data/statements/profiles", bankProfileFileName(account)), "utf8");
   } catch {
     return "";
   }
@@ -307,21 +308,32 @@ async function reconcile(
   }
 
   // ── Write missing (unambiguous only) ──
+  // Through the safeguards, not around them. This was the only write path that
+  // called writeRecords directly: no dedup against what Wallet already holds
+  // and no integrity pass over what it was about to post, on the one path that
+  // writes a whole month at a time. It also closes the instalment gap — dedup
+  // now runs on the amount that will actually be posted rather than on the
+  // instalment figure the diff matched.
   let skippedRows = 0;
+  let blocked = false;
   if (writable.length > 0) {
-    const { records, skipped } = convertRows(writable, lookup);
-    skippedRows = skipped.length;
-    if (skipped.length > 0) {
-      console.warn(`⚠️ ${skipped.length} fila(s) no convirtieron y NO se escriben: ${skipped.map((s) => s.reason).join("; ")}`);
-    }
-    if (records.length > 0) {
-      await writeRecords(couch, ctx.userId, records);
-      console.log(`\n✍️ Escritos ${records.length} registro(s) con nota [Claude reconcile ${args.month}].`);
+    const guard = await guardWrite(writable, { lookup, existing });
+    skippedRows = guard.skipped.length;
+    blocked = guard.blocked;
+    const report = formatGuardReport(guard);
+    if (report.trim()) console.log(report);
+    if (guard.blocked) {
+      console.error(`\n⛔ No se escribe nada: la verificación de integridad levantó alerta(s).`);
+    } else if (guard.records.length > 0) {
+      await commitGuardedWrite(guard, { lookup, existing, couch, userId: ctx.userId });
+      console.log(`\n✍️ Escritos ${guard.records.length} registro(s) con nota [Claude reconcile ${args.month}].`);
+    } else {
+      console.log(`\nNada que escribir después del dedup.`);
     }
   }
   // A month with rows still waiting for the crossing is not reconciled. Marking
   // it anyway turned /statements green while its transfer legs were unwritten.
-  if (held.length === 0) {
+  if (held.length === 0 && !blocked) {
     markReceived(args.account, args.month);
   } else {
     console.log(`↩️ ${args.account} · ${args.month} NO se marca conciliado: ${held.length} fila(s) en espera.`);
@@ -365,7 +377,9 @@ async function main() {
 
   console.log(`\n── reconcile-statement ── ${args.account} · ${args.month} · ${args.write ? "WRITE" : "dry"} · model=${STATEMENT_MODEL}\n`);
 
-  const ledgerPath = path.resolve(`data/statements/ledger-${profileSlug(args.account)}-${args.month}.json`);
+  // ledgerPath(), not concatenation: the hand-built copy is how the writer and
+  // the reader drifted apart in the first place.
+  const ledgerPath = ledgerPathFor(args.account, args.month);
 
   // ── Reuse a stored extraction ──
   // The approve-then-write flow runs this twice, and a second extraction is not

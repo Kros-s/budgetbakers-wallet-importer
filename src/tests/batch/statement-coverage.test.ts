@@ -22,9 +22,13 @@ function writeLedger(account: string, month: string, rows: unknown[] = []): void
 beforeEach(() => fs.rmSync(path.join(scratch, "data"), { recursive: true, force: true }));
 after(() => { process.chdir(originalCwd); fs.rmSync(scratch, { recursive: true, force: true }); });
 
-test("an account name becomes a stable file slug", () => {
+test("an account name becomes a stable file slug, accents and all", () => {
+  // Accents are stripped now. Keeping them meant one account had its PDF under
+  // one spelling and its ledger under another, and made the filenames sensitive
+  // to how macOS and Linux normalise Unicode differently.
   assert.equal(ledgerSlug("Platinum Credit Card"), "platinum-credit-card");
-  assert.equal(ledgerSlug("Banorte débito"), "banorte-débito");
+  assert.equal(ledgerSlug("Banorte débito"), "banorte-debito");
+  assert.equal(ledgerSlug("Banorte débito"), ledgerSlug("Banorte debito"));
 });
 
 test("a month with nothing extracted is not complete", () => {
