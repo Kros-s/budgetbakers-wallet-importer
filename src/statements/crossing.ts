@@ -88,7 +88,16 @@ export function toLedgerRows(account: string, rows: CsvRow[]): LedgerRow[] {
  *
  * Without these the crossing can only see the statements that arrived, so a
  * payment already recorded reads as a missing movement and gets proposed again.
- * Wallet stores amounts unsigned with a type flag: 1 is money in.
+ * Wallet stores amounts unsigned with a type flag, and it is the opposite way
+ * round from the obvious reading: **type 1 is money OUT, type 0 is money in**.
+ * Confirmed against the account itself — 848 of 849 Groceries, all 390 Fuel and
+ * all 943 Restaurant records are type 1, while all 441 Wage and all 625
+ * Interests records are type 0. `convertRows` has always written it this way.
+ *
+ * Getting it backwards inverted the sign of every Wallet row in the crossing, so
+ * a charge on a statement went looking for a Wallet row of the opposite sign and
+ * found the very same movement already recorded — pairing a purchase with itself
+ * and reporting it as a transfer leg.
  */
 export function toWalletRows(
   records: WalletRecord[],
@@ -98,7 +107,7 @@ export function toWalletRows(
   return records.map((r) => ({
     account: accountNamesById[r.accountId] ?? r.accountId,
     source: "wallet" as const,
-    cents: r.type === 1 ? r.amount : -r.amount,
+    cents: r.type === 1 ? -r.amount : r.amount,
     time: Date.parse(r.recordDate),
     date: r.recordDate.slice(0, 10),
     category: r.transfer || (transferCategoryId && r.categoryId === transferCategoryId) ? "Transfer, withdraw" : "",

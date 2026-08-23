@@ -78,7 +78,7 @@ test("a statement row pairs against what Wallet already holds", () => {
   // The point of feeding Wallet into the crossing: a payment already recorded
   // must read as "already there", not as a movement to add.
   const wallet = toWalletRows(
-    [{ accountId: "acc-bancomer", amount: 326848, type: 0, recordDate: "2026-07-01T12:00:00.000Z", transfer: true } as never],
+    [{ accountId: "acc-bancomer", amount: 326848, type: 1, recordDate: "2026-07-01T12:00:00.000Z", transfer: true } as never],
     { "acc-bancomer": "Bancomer" }
   );
   const all = [...rows("Meli", r("2026-07-01", "3268.48", "Transfer, withdraw")), ...wallet];
@@ -91,7 +91,7 @@ test("a statement row pairs against what Wallet already holds", () => {
 
 test("a leftover Wallet row is not called an orphan statement leg", () => {
   const wallet = toWalletRows(
-    [{ accountId: "a", amount: 5000, type: 0, recordDate: "2026-07-01T12:00:00.000Z", transfer: true } as never],
+    [{ accountId: "a", amount: 5000, type: 1, recordDate: "2026-07-01T12:00:00.000Z", transfer: true } as never],
     { a: "Bancomer" }
   );
   assert.deepEqual(orphanTransferLegs(crossTransfers(wallet)), []);
@@ -203,4 +203,34 @@ test("a row is held if EITHER of its dates sits at the edge", () => {
   const late: CsvRow = { ...r("2026-08-04", "-100", "Others"), opdate: "2026-07-30" };
   const { deferred } = deferNearBoundary(toLedgerRows("Costco", [late]), { from: "2026-07-01", to: "2026-07-31" });
   assert.equal(deferred.length, 1);
+});
+
+test("Wallet's type flag is read the right way round", () => {
+  // type 1 is money OUT, type 0 is money in — the opposite of the obvious
+  // reading. Confirmed on the account: 848/849 Groceries, 390/390 Fuel and
+  // 943/943 Restaurant are type 1; 441/441 Wage and 625/625 Interests are 0.
+  const [gasto] = toWalletRows(
+    [{ accountId: "a", amount: 5000, type: 1, recordDate: "2026-07-01T12:00:00.000Z" } as never],
+    { a: "Costco" }
+  );
+  const [ingreso] = toWalletRows(
+    [{ accountId: "a", amount: 5000, type: 0, recordDate: "2026-07-01T12:00:00.000Z" } as never],
+    { a: "Costco" }
+  );
+  assert.equal(gasto.cents, -5000, "type 1 sale de la cuenta");
+  assert.equal(ingreso.cents, 5000, "type 0 entra");
+});
+
+test("a purchase is not paired with its own record in Wallet", () => {
+  // With the sign inverted, a statement charge looked for a Wallet row of the
+  // opposite sign and found the same movement already recorded, pairing a
+  // purchase with itself and calling it a transfer leg.
+  const statement = toLedgerRows("Costco", [r("2026-07-09", "-50", "Others")]);
+  const wallet = toWalletRows(
+    [{ accountId: "a", amount: 5000, type: 1, recordDate: "2026-07-09T12:00:00.000Z" } as never],
+    { a: "Meli" }
+  );
+  const out = crossTransfers([...statement, ...wallet]);
+  assert.equal(out.pairs.length, 0);
+  assert.equal(out.possible.length, 0, "dos salidas no se parean entre sí");
 });
