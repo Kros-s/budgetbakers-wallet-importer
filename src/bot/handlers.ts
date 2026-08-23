@@ -506,9 +506,18 @@ async function commitPending(
       toWriteRows = keepRows;
     }
   } catch (err) {
+    // Fail closed. The catch used to leave `toWrite` as the full list and write
+    // everything unchecked while still reporting "N registros escritos" — a
+    // CouchDB timeout or a view rebuild silently disarmed the guard that exists
+    // because a $33,750 transfer was once written twice.
     deps.log.error("No se pudo verificar duplicados en Wallet", {
       error: err instanceof Error ? err.message : String(err),
     });
+    await ctx.reply(
+      `⛔ No pude comprobar duplicados contra Wallet, así que no escribí nada.\n` +
+        `Vuelve a confirmar en un momento.`
+    );
+    return;
   }
 
   if (toWrite.length === 0) {
@@ -1169,6 +1178,17 @@ export function registerHandlers(deps: HandlerDeps): void {
       if (isPdf && !target) {
         const routed = await tryStatementRoute(deps, ctx.chat.id, downloaded.localPath);
         if (routed) return;
+        // Detection failing is not permission to use the generic path. That path
+        // knows nothing about statement periods, instalments or transfer legs,
+        // so a statement that merely timed out would be proposed as a plain CSV
+        // and one tap would write the whole month through the weakest gate.
+        await sendSafeMessage(
+          deps.bot.telegram, ctx.chat.id,
+          `📄 No pude identificar este PDF como estado de cuenta — puede que la lectura fallara o que el ` +
+            `documento no declare su periodo.\n\nSi ES un estado de cuenta, dime de qué cuenta y qué mes y ` +
+            `lo proceso por el camino correcto. Si NO lo es, mándalo otra vez con un caption diciendo qué es.`
+        );
+        return;
       }
 
       const prompt =

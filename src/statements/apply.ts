@@ -81,12 +81,20 @@ function dayGap(a: string, b: string): number {
  * bank posts it — a movement recorded from its alert carries the operation date
  * while the statement publishes the posting date.
  */
-function alreadyRecorded(account: string, row: CsvRow, wallet: LedgerRow[]): LedgerRow | undefined {
+function alreadyRecorded(
+  account: string,
+  row: CsvRow,
+  wallet: LedgerRow[],
+  used: Set<LedgerRow>
+): LedgerRow | undefined {
   const cents = signedCents(row);
   if (!Number.isFinite(cents)) return undefined;
   const dates = [String(row.date), ...(row.opdate ? [row.opdate] : [])];
+  // Consumed once, as diff() already does: without it two identical statement
+  // rows both matched one Wallet record and both reported "already recorded",
+  // so the second real movement disappeared from the plan.
   return wallet.find(
-    (w) => w.account === account && w.cents === cents &&
+    (w) => !used.has(w) && w.account === account && w.cents === cents &&
       dates.some((d) => dayGap(d, w.date) <= MATCH_SLACK_DAYS)
   );
 }
@@ -142,10 +150,12 @@ export function planMonth(
   // Rows still owed after Wallet has been consulted — only these can pair, and
   // only these can be written.
   const outstanding: { account: string; row: CsvRow; led: LedgerRow }[] = [];
+  const usedWallet = new Set<LedgerRow>();
   for (const { account, rows } of usable) {
     for (const row of rows) {
-      const hit = alreadyRecorded(account, row, wallet);
+      const hit = alreadyRecorded(account, row, wallet, usedWallet);
       if (hit) {
+        usedWallet.add(hit);
         planned.push({ account, row, disposition: "recorded", reason: "ya está en Wallet" });
         continue;
       }

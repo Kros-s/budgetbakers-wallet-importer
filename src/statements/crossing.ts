@@ -141,21 +141,29 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
   const pairs: TransferPair[] = [];
   const possible: TransferPair[] = [];
 
-  for (const out of outs) {
-    let best: LedgerRow | undefined;
-    let bestGap = Infinity;
-    for (const cand of ins) {
-      if (used.has(cand)) continue;
-      if (cand.account === out.account) continue;
-      if (cand.cents !== -out.cents) continue;
-      // Closest across every date either side published. A bank that posts a
-      // purchase two days later would otherwise leave the two legs looking
-      // like different movements.
-      const gap = closestGap(out, cand);
-      if (gap > window) continue;
-      if (gap < bestGap) { best = cand; bestGap = gap; }
-    }
-    if (best) {
+  /**
+   * Pairs greedily within one class of candidates.
+   *
+   * Two passes, and the order matters: a transfer must get first refusal on the
+   * legs it needs. Walking every outgoing row at once let an unrelated $500
+   * purchase claim the incoming leg a genuine $500 transfer was waiting for,
+   * and the transfer was then reported as an orphan.
+   */
+  const sweep = (accept: (out: LedgerRow, cand: LedgerRow) => boolean): void => {
+    for (const out of outs) {
+      if (used.has(out)) continue;
+      let best: LedgerRow | undefined;
+      let bestGap = Infinity;
+      for (const cand of ins) {
+        if (used.has(cand)) continue;
+        if (cand.account === out.account) continue;
+        if (cand.cents !== -out.cents) continue;
+        if (!accept(out, cand)) continue;
+        const gap = closestGap(out, cand);
+        if (gap > window) continue;
+        if (gap < bestGap) { best = cand; bestGap = gap; }
+      }
+      if (!best) continue;
       used.add(best);
       used.add(out);
       const pair = { out, in: best, gapDays: Math.round(bestGap / 86_400_000) };
@@ -167,7 +175,11 @@ export function crossTransfers(rows: LedgerRow[], gapDays = DEFAULT_GAP_DAYS): C
         possible.push(pair);
       }
     }
-  }
+  };
+
+  sweep((out, cand) => isTransferRow(out) && isTransferRow(cand));
+  sweep((out, cand) => isTransferRow(out) || isTransferRow(cand));
+  sweep(() => true);
 
   return { pairs, possible, unpaired: rows.filter((r) => !settled.has(r)) };
 }

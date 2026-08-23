@@ -333,10 +333,18 @@ async function reconcile(
   }
   // A month with rows still waiting for the crossing is not reconciled. Marking
   // it anyway turned /statements green while its transfer legs were unwritten.
-  if (held.length === 0 && !blocked) {
+  // Anything unresolved leaves the month open. Marking it on `held` alone let
+  // ambiguous rows and rows the converter refused vanish into a month the
+  // registry then never chased again.
+  const unresolved = held.length + d.ambiguous.length + skippedRows;
+  if (unresolved === 0 && !blocked) {
     markReceived(args.account, args.month);
   } else {
-    console.log(`↩️ ${args.account} · ${args.month} NO se marca conciliado: ${held.length} fila(s) en espera.`);
+    console.log(
+      `↩️ ${args.account} · ${args.month} NO se marca conciliado: ` +
+        `${held.length} en espera, ${d.ambiguous.length} ambiguo(s), ${skippedRows} sin convertir` +
+        (blocked ? ", integridad bloqueó la escritura" : "") + "."
+    );
   }
 
   // The PDF has served its purpose — unless something in it is still unresolved.

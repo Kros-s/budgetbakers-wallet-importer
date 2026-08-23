@@ -172,3 +172,19 @@ test("an expense never waits on the month being complete", () => {
   ], []);
   assert.equal(countBy(plan).write, 1);
 });
+
+test("one Wallet record cannot settle two identical statement rows", () => {
+  // Two $10 charges days apart against a single recorded $10: without consuming
+  // the match, both reported "already in Wallet" and the second real movement
+  // vanished from the plan.
+  const plan = planMonth(
+    "2026-07",
+    [{ account: "Meli", rows: [
+      r({ amount: "-10.00", date: "2026-07-09 12:00:00" }),
+      r({ amount: "-10.00", date: "2026-07-11 12:00:00" }),
+    ] }],
+    wallet([{ account: "Meli", cents: -1000, date: "2026-07-09" }])
+  );
+  assert.equal(countBy(plan).recorded, 1);
+  assert.equal(countBy(plan).write, 1);
+});

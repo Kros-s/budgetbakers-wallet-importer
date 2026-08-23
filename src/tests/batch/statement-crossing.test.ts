@@ -234,3 +234,19 @@ test("a purchase is not paired with its own record in Wallet", () => {
   assert.equal(out.pairs.length, 0);
   assert.equal(out.possible.length, 0, "dos salidas no se parean entre sí");
 });
+
+test("a coincidence does not take the counterpart a real transfer needs", () => {
+  // Outs are walked in time order, so an unrelated earlier row could claim the
+  // incoming leg and the genuine transfer was then reported as an orphan.
+  const all = [
+    ...rows("Costco", r("2026-07-01", "-500", "Groceries")),
+    ...rows("Bancomer", r("2026-07-02", "500", "Transfer, withdraw")),
+    ...rows("Banorte", r("2026-07-02", "-500", "Transfer, withdraw")),
+  ];
+  const out = crossTransfers(all);
+  assert.equal(out.pairs.length, 1, "el traspaso real sí parea");
+  assert.deepEqual(
+    [out.pairs[0].out.account, out.pairs[0].in.account].sort(),
+    ["Bancomer", "Banorte"]
+  );
+});
