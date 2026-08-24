@@ -54,6 +54,16 @@ export interface MonthView {
   periods: MonthWindow;
   /** The Wallet records the window returned, so a caller can write without re-fetching. */
   records: WalletRecord[];
+  /**
+   * Which account contributed a statement for which month.
+   *
+   * A range's plan says what each row is and which account it belongs to, but
+   * not which month's statement it came out of — and marking a month reconciled
+   * needs exactly that. Without it `/statements` stayed red on months whose
+   * every row had been written, which is the same lie as staying green on a
+   * month that had not, pointing the other way.
+   */
+  ledgers: { account: string; month: string }[];
 }
 
 export async function loadMonth(
@@ -70,8 +80,8 @@ export async function loadMonth(
 
   const stored = months.flatMap((month) =>
     monthCoverage(month).have
-      .map((account) => ({ account, led: loadLedger(account, month) }))
-      .filter((x): x is { account: string; led: NonNullable<typeof x.led> } => x.led !== null)
+      .map((account) => ({ account, month, led: loadLedger(account, month) }))
+      .filter((x): x is { account: string; month: string; led: NonNullable<typeof x.led> } => x.led !== null)
   );
 
   // The range covers every contributing account's real period, not the calendar
@@ -99,5 +109,6 @@ export async function loadMonth(
     window: { from, to },
     periods,
     records,
+    ledgers: stored.map(({ account, month }) => ({ account, month })),
   };
 }
