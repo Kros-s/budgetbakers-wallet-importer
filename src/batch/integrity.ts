@@ -30,6 +30,16 @@ export interface InspectedRecord {
    */
   transfer: boolean;
   accountId: string;
+  /**
+   * The id both legs of one transfer share, when the record carries it.
+   *
+   * A leg that names its partner needs no reconstructing, and reconstructing is
+   * the only thing the amount comparison below can do. It cannot do it across
+   * currencies: DolarApp's -9,300 USD and Bancomer's +163,202.91 MXN are one
+   * movement, correctly linked, and read as two orphans by any rule that
+   * expects the figures to match.
+   */
+  transferId?: string;
   categoryName?: string;
   payee?: string;
   note?: string;
@@ -129,6 +139,8 @@ export function amountsInText(text: string): number[] {
 }
 
 function hasCounterpart(leg: InspectedRecord, pool: InspectedRecord[]): boolean {
+  // What the record says about itself comes first.
+  if (leg.transferId && pool.some((o) => o.id !== leg.id && o.transferId === leg.transferId)) return true;
   const legTime = Date.parse(leg.recordDate);
   return pool.some(
     (other) =>

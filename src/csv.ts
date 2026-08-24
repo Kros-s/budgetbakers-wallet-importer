@@ -119,6 +119,18 @@ export interface CsvRow {
    * `statements/cash.ts`.
    */
   efectivo?: string;
+  /**
+   * A key both legs of one transfer share, stamped by whatever decided they are
+   * one movement.
+   *
+   * Without it the only way two rows can be linked is an identical `date`
+   * string, which is all a hand-written CSV can offer. A statement can offer
+   * more: banks post the two sides on different days — Bancomer sent $50,187.53
+   * on 15-jun and Banorte débito received it on 13-jun, which is one movement
+   * by every measure except the one `linkTransferPairs` had. Both legs were
+   * refused and the month would not write.
+   */
+  pareja?: string;
 }
 
 /** A row that could not be converted, with a reason. */
@@ -147,7 +159,7 @@ export const CSV_HEADER = [
   // it pasted when a proposal is confirmed, so a marker dropped here is a
   // deferred purchase written at the wrong price and an instalment written at
   // all. They are blank for every row that has no statement behind it.
-  "opdate", "meses", "montooriginal", "desc", "mxn", "efectivo",
+  "opdate", "meses", "montooriginal", "desc", "mxn", "efectivo", "pareja",
 ] as const;
 
 /**
@@ -345,6 +357,8 @@ interface TransferLeg {
   index: number;
   /** The row's `date` column, trimmed. Legs only pair within the same date. */
   dateKey: string;
+  /** An explicit pair key, when whatever produced the row knew the two belonged together. */
+  pairKey?: string;
   /** Unsigned cents, exactly as the record stores it. */
   amount: number;
   /** RECORD_TYPE.EXPENSE (1) = money out, RECORD_TYPE.INCOME (0) = money in. */
@@ -421,11 +435,13 @@ function linkTransferPairs(records: NewRecord[], legs: TransferLeg[]): UnpairedL
   // usable counterpart always wins, so the same CSV always pairs the same way.
   const buckets = new Map<string, TransferLeg[]>();
   for (const leg of legs) {
-    // The local-currency figure when there is one, the face amount otherwise —
-    // a peso account's face amount already IS its peso figure, so the two sides
-    // of a cross-currency transfer land in the same bucket and a same-currency
-    // pair behaves exactly as before.
-    const key = `${leg.dateKey}|${leg.pesos ?? leg.amount}`;
+    // An explicit pair key wins outright: whatever stamped it knew these two
+    // were one movement, and knew it from more than a date and a figure.
+    // Otherwise the local-currency figure when there is one, the face amount
+    // otherwise — a peso account's face amount already IS its peso figure, so
+    // the two sides of a cross-currency transfer land in the same bucket and a
+    // same-currency pair behaves exactly as before.
+    const key = leg.pairKey ? `pareja:${leg.pairKey}` : `${leg.dateKey}|${leg.pesos ?? leg.amount}`;
     const bucket = buckets.get(key);
     if (bucket) bucket.push(leg);
     else buckets.set(key, [leg]);
@@ -617,6 +633,7 @@ export function convertRows(rows: CsvRow[], maps: LookupMaps): ParseResult {
         accountId,
         accountName: row.account.trim(),
         pesos: localAmount(row.mxn),
+        pairKey: row.pareja?.trim() || undefined,
       });
     }
 

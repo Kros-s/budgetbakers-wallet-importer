@@ -183,3 +183,28 @@ test("interest paid by the bank needs no counterparty named", () => {
   });
   assert.equal(arrival.filter((f) => f.kind === "inflow-without-counterparty").length, 1);
 });
+
+test("a leg that names its partner is not an orphan, whatever the amounts say", () => {
+  // DolarApp's -9,300 USD and Bancomer's +163,202.91 MXN are one movement,
+  // correctly linked by a shared transferId. Rebuilding the pair from the
+  // figures cannot work across currencies, and read that way both are orphans
+  // and the whole month refuses to write.
+  const leg = (id: string, cents: number, type: number, accountId: string): InspectedRecord => ({
+    id, amountCents: cents, type, transfer: true, transferId: "shared-1",
+    accountId, categoryName: "Transfer, withdraw", recordDate: "2026-07-01T12:00:00.000-06:00",
+  });
+  const findings = checkRunIntegrity({
+    written: [leg("a", 930000, 1, "-Account_usd"), leg("b", 16320291, 0, "-Account_mxn")],
+  });
+  assert.equal(findings.filter((f) => f.kind === "orphan-transfer-leg").length, 0);
+});
+
+test("a leg whose partner is nowhere is still an orphan", () => {
+  const lone: InspectedRecord = {
+    id: "a", amountCents: 930000, type: 1, transfer: true, transferId: "shared-1",
+    accountId: "-Account_usd", categoryName: "Transfer, withdraw",
+    recordDate: "2026-07-01T12:00:00.000-06:00",
+  };
+  const findings = checkRunIntegrity({ written: [lone] });
+  assert.equal(findings.filter((f) => f.kind === "orphan-transfer-leg").length, 1);
+});

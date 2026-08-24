@@ -195,6 +195,7 @@ function inspectCandidate(entry: GuardedRecord, names: Record<string, string>): 
   return {
     id,
     description: row.desc,
+    transferId: record.transferId,
     amountCents: record.amount,
     type: record.type,
     // Either field means "transfer". `convertRows` sets the boolean, but a
@@ -215,6 +216,7 @@ function inspectExisting(r: WalletRecord, names: Record<string, string>): Inspec
     amountCents: Number(r.amount),
     type: Number(r.type),
     transfer: Boolean(r.transfer || r.transferId),
+    transferId: r.transferId ? String(r.transferId) : undefined,
     accountId: String(r.accountId),
     categoryName: names[String(r.categoryId)],
     payee: r.payee,

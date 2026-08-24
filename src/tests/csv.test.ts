@@ -383,3 +383,47 @@ test("without a published equivalent the cross-currency legs are left unpaired",
   assert.equal(records.length, 0);
   assert.equal(skipped.length, 2);
 });
+
+test("two legs the crossing paired link even when the bank dated them differently", () => {
+  // Bancomer sent $50,187.53 on 15-jun and Banorte débito received it on
+  // 13-jun. One movement by every measure except the identical date string
+  // `linkTransferPairs` used to demand — both legs were refused and the month
+  // would not write.
+  const maps: LookupMaps = {
+    accounts: { Bancomer: "-Account_bbva", "Banorte débito": "-Account_banorte" },
+    accountCurrencies: { Bancomer: "-Currency_mxn", "Banorte débito": "-Currency_mxn" },
+    categories: { "Transfer, withdraw": "-Category_transfer" },
+    currencies: { MXN: "-Currency_mxn" },
+    transferCategoryId: "-Category_transfer",
+    labels: {},
+  };
+  const key = "Bancomer|2026-06-15|-5018753~Banorte débito|2026-06-13|5018753";
+  const { records, skipped } = convertRows([
+    { date: "2026-06-15 12:00:00", account: "Bancomer", amount: "-50187.53", category: "Transfer, withdraw", note: "", payee: "Banorte", pareja: key },
+    { date: "2026-06-13 12:00:00", account: "Banorte débito", amount: "50187.53", category: "Transfer, withdraw", note: "", payee: "Bancomer", pareja: key },
+  ], maps);
+  assert.equal(skipped.length, 0);
+  assert.ok(records[0].transferId);
+  assert.equal(records[0].transferId, records[1].transferId);
+  assert.equal(records[0].transferAccountId, "-Account_banorte");
+  assert.equal(records[1].transferAccountId, "-Account_bbva");
+});
+
+test("a pair key does not link two legs of the same account", () => {
+  // A transfer has two accounts by definition; a shared key is not licence to
+  // merge two movements that never left one.
+  const maps: LookupMaps = {
+    accounts: { Bancomer: "-Account_bbva" },
+    accountCurrencies: { Bancomer: "-Currency_mxn" },
+    categories: { "Transfer, withdraw": "-Category_transfer" },
+    currencies: { MXN: "-Currency_mxn" },
+    transferCategoryId: "-Category_transfer",
+    labels: {},
+  };
+  const { records, skipped } = convertRows([
+    { date: "2026-06-15 12:00:00", account: "Bancomer", amount: "-100.00", category: "Transfer, withdraw", note: "", payee: "", pareja: "k" },
+    { date: "2026-06-13 12:00:00", account: "Bancomer", amount: "100.00", category: "Transfer, withdraw", note: "", payee: "", pareja: "k" },
+  ], maps);
+  assert.equal(records.length, 0);
+  assert.equal(skipped.length, 2);
+});

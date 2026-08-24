@@ -131,6 +131,20 @@ function isUnexplainedInflow(row: CsvRow): boolean {
  * statements: deciding one statement at a time cannot see the other half, so it
  * writes half a movement and writes it again when the counterpart arrives.
  */
+/**
+ * The name both legs of one pair are stamped with.
+ *
+ * Built from the pair itself rather than generated, so the same month planned
+ * twice produces the same keys — a plan that reads differently on a second run
+ * is a plan nobody can review. Ordered so each leg computes the same key from
+ * its own side.
+ */
+function pairKey(a: LedgerRow, b: LedgerRow): string {
+  const one = `${a.account}|${a.date}|${a.cents}`;
+  const two = `${b.account}|${b.date}|${b.cents}`;
+  return one < two ? `${one}~${two}` : `${two}~${one}`;
+}
+
 export function planMonth(
   month: string,
   ledgers: LedgerInput[],
@@ -241,9 +255,15 @@ export function planMonth(
       // them only if BOTH carry that category. Bancomer's arrival from DolarApp
       // was extracted as "Wage, invoices" — paired here and written as income
       // there, with its partner written as a lone withdrawal.
+      // Both legs are restated to the transfer category, and it matters: the
+      // crossing decides two rows are one movement, but `convertRows` links
+      // them only if BOTH carry that category. They are also stamped with a
+      // shared key, because `convertRows` otherwise falls back to matching an
+      // identical date string — and banks post the two sides on different days.
+      const key = pairKey(led, other);
       planned.push({
         account,
-        row: isTransferRow(row) ? row : { ...row, category: TRANSFER_CATEGORY },
+        row: { ...row, category: isTransferRow(row) ? row.category : TRANSFER_CATEGORY, pareja: key },
         disposition: "pair",
         reason: `traspaso con ${byLed.get(other)?.account ?? "otra cuenta"}`,
         withAccount: byLed.get(other)?.account,
