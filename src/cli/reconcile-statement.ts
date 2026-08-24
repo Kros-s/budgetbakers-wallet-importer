@@ -46,6 +46,7 @@ import {
 import { parseDeclaredCharges, parseDeclaredNet, weighTotals } from "../statements/extraction.js";
 import { describeIgnored } from "../statements/installments.js";
 import { describeCash } from "../statements/cash.js";
+import { describeSplice, loadCardDetail, spliceCardDetail } from "../statements/card-detail.js";
 import type { ExtractionVerdict } from "../statements/extraction.js";
 import { describeHeld, planWrites } from "../statements/write-policy.js";
 import { type LedgerRow, toLedgerRows, toWalletRows } from "../statements/crossing.js";
@@ -485,11 +486,23 @@ async function main() {
   }
   const { csv } = extractCsvBlock(result.text);
   if (!csv) throw new Error(`Sin bloque CSV en la respuesta:\n${result.text.slice(0, 400)}`);
-  const rows = parseCsv(csv);
+  const extracted = parseCsv(csv);
   const claimed = /TOTAL_MOVIMIENTOS:\s*(\d+)/.exec(result.text)?.[1];
-  console.log(`Extraídos ${rows.length} movimiento(s)${claimed ? ` (Claude declara ${claimed})` : ""}.`);
-  if (claimed && Number(claimed) !== rows.length) {
-    console.warn(`⚠️ El conteo declarado (${claimed}) no coincide con las filas (${rows.length}) — revisar extracción.`);
+  console.log(`Extraídos ${extracted.length} movimiento(s)${claimed ? ` (Claude declara ${claimed})` : ""}.`);
+  if (claimed && Number(claimed) !== extracted.length) {
+    console.warn(`⚠️ El conteo declarado (${claimed}) no coincide con las filas (${extracted.length}) — revisar extracción.`);
+  }
+
+  // Movements the statement settles in one line and never itemises. Spliced
+  // before anything else looks at the rows — including the balance checks,
+  // which are unaffected because the detail has to sum to the aggregate exactly
+  // or nothing is replaced.
+  const detail = loadCardDetail(args.account, args.month);
+  let rows = extracted;
+  if (detail) {
+    const splice = spliceCardDetail(extracted, detail.rows);
+    console.log(describeSplice(splice, detail));
+    rows = splice.rows;
   }
 
   // The row count is self-reported and stays consistent when a movement is
