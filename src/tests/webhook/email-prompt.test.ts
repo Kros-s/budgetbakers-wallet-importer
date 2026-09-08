@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildEmailPrompt, clampBody } from "../../webhook/email-processor.js";
+import { buildEmailPrompt, clampBody, extractAskBlock } from "../../webhook/email-processor.js";
 
 test("a body within budget is passed through untouched", () => {
   assert.equal(clampBody("Recibiste $700.00 MN", 8_000), "Recibiste $700.00 MN");
@@ -40,4 +40,43 @@ test("a payload without a date says so instead of omitting the line", () => {
     from: "x@y.com", subject: "s", text: "t",
   });
   assert.ok(prompt.includes("Recibido: (fecha desconocida)"));
+});
+
+test("a CSV can carry a follow-up question without the block reaching anyone", () => {
+  const reply = [
+    "Registro la compra.",
+    "<<<CSV>>>",
+    "date,account,amount,category,note,payee",
+    "2026-08-30 12:00:00,Costco,-1042.80,Others,,MERPAGO*QUINTAII",
+    "<<<END>>>",
+    "<<<ASK>>>",
+    "¿Qué comercio es MERPAGO*QUINTAII?",
+    "<<<END_ASK>>>",
+  ].join("\n");
+  const { ask, cleanedText } = extractAskBlock(reply);
+  assert.equal(ask, "¿Qué comercio es MERPAGO*QUINTAII?");
+  assert.ok(!cleanedText.includes("<<<ASK>>>"));
+  assert.ok(!cleanedText.includes("<<<END_ASK>>>"));
+  // The CSV must survive untouched — it is extracted after this.
+  assert.ok(cleanedText.includes("2026-08-30 12:00:00,Costco,-1042.80,Others,,MERPAGO*QUINTAII"));
+});
+
+test("a reply without the block is passed through unchanged", () => {
+  const { ask, cleanedText } = extractAskBlock("¿De qué cuenta salió el pago?");
+  assert.equal(ask, null);
+  assert.equal(cleanedText, "¿De qué cuenta salió el pago?");
+});
+
+test("an empty block is no question at all", () => {
+  // Otherwise the queue fills with blank prompts nobody can answer.
+  const { ask } = extractAskBlock("texto\n<<<ASK>>>\n\n<<<END_ASK>>>");
+  assert.equal(ask, null);
+});
+
+test("the prompt tells the model to record and ask, not ask instead of record", () => {
+  const prompt = buildEmailPrompt({ from: "a@b.c", subject: "s", text: "t" });
+  // The rule lives in the system prompt, not this one; assert the user prompt
+  // still carries the body and headers it is responsible for.
+  assert.ok(prompt.includes("De: a@b.c"));
+  assert.ok(prompt.includes("Asunto: s"));
 });

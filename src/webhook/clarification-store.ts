@@ -40,6 +40,18 @@ export interface ClarificationEntry {
   emailFolder?: string;
   claudeQuestion: string;
   createdAt: number;
+  /**
+   * Records already written for this movement, awaiting only their category.
+   *
+   * A movement whose amount, date and account are all known is recorded under
+   * a provisional category rather than withheld: losing $1,042 because nobody
+   * knows what "MERPAGO*QUINTAII" is costs more than a wrong category does.
+   * The answer then corrects these documents — it must never write new ones,
+   * or the movement is booked twice.
+   */
+  recordIds?: string[];
+  /** The placeholder those records carry, so the question can say so. */
+  provisionalCategory?: string;
 }
 
 const STORE_PATH = join(process.cwd(), "data/bot/pending-clarifications.json");

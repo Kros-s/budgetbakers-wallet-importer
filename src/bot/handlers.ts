@@ -26,7 +26,7 @@ import type { AxiosInstance } from "axios";
 import type { LookupMaps } from "../types.js";
 import { convertRows, parseCsv, rowsToCsv } from "../csv.js";
 import type { CsvRow } from "../csv.js";
-import { writeRecords } from "../records.js";
+import { recategorizeRecords, writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import type { Logger } from "../logger.js";
 
@@ -44,6 +44,7 @@ import {
   clearAllPending,
   type BotSession,
 } from "./session.js";
+import type { PendingProposal } from "./session.js";
 import { trackTransaction } from "../webhook/daily-tracker.js";
 import {
   takeClarification,
@@ -365,11 +366,20 @@ async function processUserTurn(
       }
     }
 
+    // A question raised over nothing but the category belongs to a movement
+    // that is already in Wallet. Confirming must correct it, never write it
+    // again — the proposal carries the documents to fix.
+    const recategorizeIds =
+      clarificationShortId === undefined
+        ? undefined
+        : findByShortId(clarificationShortId)?.entry.recordIds;
+
     setPending(session.chatId, {
       rows,
       summary: cleanedText,
       createdAt: Date.now(),
       clarificationShortId,
+      recategorizeIds,
     });
 
     // Warn before the button, not after. The confirm path blocks duplicates
@@ -440,6 +450,59 @@ async function processUserTurn(
   await sendLong(ctx, (cleanedText || "(sin respuesta)") + ruleNote);
 }
 
+/**
+ * Applies the answer to records that already exist, rather than writing new ones.
+ *
+ * The proposal the model produced is read only for its category: the amount,
+ * date and account were never in doubt — they are why the movement could be
+ * booked before the question was answered.
+ */
+async function applyRecategorization(
+  deps: HandlerDeps,
+  ctx: Context,
+  session: BotSession,
+  pending: PendingProposal
+): Promise<void> {
+  const name = pending.rows.map((r) => r.category?.trim()).find(Boolean) ?? "";
+  const categoryId = deps.lookup.categories[name];
+  if (!categoryId) {
+    // Nothing was corrected, so the proposal goes back and the question stays.
+    setPending(session.chatId, pending);
+    await ctx.reply(
+      `⚠️ No reconozco la categoría "${name}". Dímela con el nombre exacto del catálogo y la aplico.`
+    );
+    return;
+  }
+
+  let results;
+  try {
+    results = await recategorizeRecords(deps.couch, pending.recategorizeIds ?? [], categoryId);
+  } catch (err) {
+    setPending(session.chatId, pending);
+    deps.log.error("recategorizeRecords threw", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    await ctx.reply(
+      `❌ No pude corregir la categoría: ${err instanceof Error ? err.message : String(err)}\n` +
+        `El movimiento sigue registrado; la pregunta sigue en la cola.`
+    );
+    return;
+  }
+
+  const ok = results.filter((r) => r.ok).length;
+  const fail = results.length - ok;
+  let msg = `🏷️ ${ok} registro${ok === 1 ? "" : "s"} recategorizado${ok === 1 ? "" : "s"} como *${name}*.`;
+  if (fail > 0) msg += `\n⚠️ ${fail} no se pudieron actualizar.`;
+
+  // Only a clean correction resolves it; a partial one still needs a human.
+  if (pending.clarificationShortId !== undefined && ok > 0 && fail === 0) {
+    if (takeByShortId(pending.clarificationShortId, `recategorizada como ${name}`)) {
+      msg += `\n📋 #${pending.clarificationShortId} fuera de la cola.`;
+    }
+  }
+  await ctx.reply(msg, { parse_mode: "Markdown" });
+}
+
 async function commitPending(
   deps: HandlerDeps,
   ctx: Context,
@@ -453,6 +516,13 @@ async function commitPending(
   }
 
   await ctx.sendChatAction("typing").catch(() => {});
+
+  // Already booked under a provisional category: correct it and stop. Falling
+  // through would write the movement a second time.
+  if (pending.recategorizeIds?.length) {
+    await applyRecategorization(deps, ctx, session, pending);
+    return;
+  }
 
   const { records, originalRows, skipped } = convertRows(pending.rows, deps.lookup);
 

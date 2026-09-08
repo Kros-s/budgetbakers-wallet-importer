@@ -53,7 +53,7 @@ Reglas:
 - date: YYYY-MM-DD HH:MM:SS en hora local; si no hay hora exacta usa 12:00:00\n- Si el cuerpo no dice la fecha, usa la de "Recibido" que viene arriba. NO preguntes por la fecha: muchos avisos no la traen en el texto y esa es la fecha en que el banco lo envió.
 - amount: negativo = gasto, positivo = ingreso
 - Categorías con coma van entre comillas en el CSV
-- Si no reconoces la cuenta por terminación de tarjeta, pregunta en lugar de inventar
+- Si no reconoces la cuenta por terminación de tarjeta, pregunta en lugar de inventar\n- CATEGORÍA DESCONOCIDA: si sabes monto, fecha y cuenta pero NO sabes qué es el comercio, NO conviertas eso en una pregunta suelta. Emite el CSV con categoría Others Y ADEMÁS este bloque:\n<<<ASK>>>\n<tu pregunta en una línea>\n<<<END_ASK>>>\nEl movimiento queda registrado de inmediato y la pregunta sirve solo para corregirle la categoría después. Esto aplica SOLO a la categoría: si te falta el monto o la cuenta, pregunta sin CSV como siempre.
 - note y payee: opcionales, vacíos si no aplican
 - TRANSFERENCIAS AMBIGUAS: Si el correo muestra una transferencia SPEI, pago interbancario o "pago a tercero" y el destinatario NO es claramente una de las cuentas del usuario: pregunta "¿Es transferencia entre tus cuentas o un pago a alguien/servicio? Si es pago, ¿qué categoría corresponde?". Usa "Transfer, withdraw" SOLO cuando estés seguro de que es un movimiento entre las cuentas propias del usuario (p.ej. pago de tarjeta de crédito propia, traspaso a su cuenta de ahorro).
 - Para registrar una transferencia entre cuentas propias del usuario emite DOS filas CSV con la MISMA fecha/hora exacta y categoría "Transfer, withdraw": una negativa en la cuenta origen y una positiva en la cuenta destino. NUNCA emitas una sola fila con categoría Transfer (se rechaza). Para dinero que llega de fuera (no es cuenta propia), usa categoría de ingreso normal (p.ej. Others o "Wage, invoices"), no Transfer.
@@ -172,6 +172,24 @@ export function buildEmailPrompt(payload: EmailPayload): string {
     `---\n${body}\n---\n\n` +
     `Si contiene transacciones, propón el CSV. Si no es transaccional (marketing, OTP, aviso), responde solo: NO_TRANSACTION`
   );
+}
+
+/** The provisional category a movement waits under while its own is unknown. */
+export const PROVISIONAL_CATEGORY = "Others";
+
+/**
+ * Pulls the follow-up question the model may attach to a CSV it is sure of
+ * except for the category.
+ *
+ * Returns the question and the text with the block removed, so the block never
+ * reaches the user or the CSV parser.
+ */
+export function extractAskBlock(text: string): { ask: string | null; cleanedText: string } {
+  const match = /<<<ASK>>>\s*([\s\S]*?)\s*<<<END_ASK>>>/.exec(text);
+  if (!match) return { ask: null, cleanedText: text };
+  const ask = match[1].trim();
+  const cleanedText = (text.slice(0, match.index) + text.slice(match.index + match[0].length)).trim();
+  return { ask: ask || null, cleanedText };
 }
 
 function buildSuccessMessage(rows: ReturnType<typeof parseCsv>): string {
@@ -296,7 +314,9 @@ export async function processEmail(
     effectiveText = challenge.question;
   }
 
-  const { csv, cleanedText } = extractCsvBlock(effectiveText);
+  // Pulled before the CSV so the block never reaches the parser or the user.
+  const { ask, cleanedText: withoutAsk } = extractAskBlock(effectiveText);
+  const { csv, cleanedText } = extractCsvBlock(withoutAsk);
 
   // Claude asked a clarifying question — persist context to disk and notify user
   if (!csv) {
@@ -330,7 +350,7 @@ export async function processEmail(
       emailDate: payload.date,
       emailUid: payload.uid,
       emailFolder: payload.folder,
-      claudeQuestion: effectiveText,
+      claudeQuestion: ask ?? effectiveText,
       createdAt: Date.now(),
     };
 
@@ -440,6 +460,36 @@ export async function processEmail(
     }
 
     await bot.telegram.sendMessage(notificationChatId, `${buildSuccessMessage(rows)}${ruleNote}`);
+
+    // The movement is booked; only its category is a guess. Asking without
+    // recording was costing the whole transaction over a merchant nobody
+    // recognised — six of those in three weeks, one of them $1,042.80. The
+    // question still goes out, it just no longer holds the money hostage.
+    if (ask) {
+      const provisional = rows.find((r) => r.category === PROVISIONAL_CATEGORY)?.category
+        ?? PROVISIONAL_CATEGORY;
+      const sent = await sendSafeMessage(
+        bot.telegram,
+        notificationChatId,
+        `🏷️ *Registrado como ${escapeMarkdown(provisional)} — falta la categoría*\n\n` +
+          `${escapeMarkdown(ask)}\n\n` +
+          `_↩️ Responde a este mensaje y corrijo la categoría del registro. El movimiento ya está en Wallet._`
+      );
+      storeClarification(sent.message_id, {
+        chatId: notificationChatId,
+        emailFrom: payload.from,
+        emailSubject: payload.subject,
+        emailText: payload.text,
+        emailDate: payload.date,
+        emailUid: payload.uid,
+        emailFolder: payload.folder,
+        claudeQuestion: ask,
+        createdAt: Date.now(),
+        recordIds: bulk.map((b) => b.id),
+        provisionalCategory: provisional,
+      });
+    }
+
     return {
       status: "written",
       written: records.length,

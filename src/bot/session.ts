@@ -17,6 +17,14 @@ export interface PendingProposal {
   createdAt: number;
   /** Telegram message_id of the proposal message; set after the message is sent. */
   messageId?: number;
+  /**
+   * Records to recategorise instead of writing.
+   *
+   * Set when the movement was already booked under a provisional category and
+   * only the category was in question. Confirming must then correct these
+   * documents; writing the proposed rows would book the movement a second time.
+   */
+  recategorizeIds?: string[];
 }
 
 export interface BotSession {

@@ -300,3 +300,40 @@ export async function deleteRecords(
 
   return res.data;
 }
+
+/**
+ * Changes the category of records already in Wallet.
+ *
+ * A movement whose amount, date and account are all known must not be lost
+ * because the category is not: it is recorded under a provisional one and the
+ * question stays open. Answering then has to correct what exists — writing a
+ * second record would book the movement twice, which is exactly how $33,750
+ * ended up in Wallet twice on 2026-08-19.
+ *
+ * Reads each document first because CouchDB needs the current `_rev` and
+ * refuses a stale one, which is the behaviour we want: if something else edited
+ * the record in between, this fails loudly instead of reverting that edit.
+ */
+export async function recategorizeRecords(
+  couch: AxiosInstance,
+  docIds: string[],
+  categoryId: string,
+  note?: string
+): Promise<BulkResult[]> {
+  if (!docIds.length) return [];
+
+  const docs: WalletRecord[] = [];
+  for (const id of docIds) {
+    const doc = await getRecord(couch, id);
+    docs.push({
+      ...doc,
+      categoryId,
+      categoryChanged: true,
+      ...(note === undefined ? {} : { note }),
+      reservedUpdatedAt: new Date().toISOString(),
+    });
+  }
+
+  const res = await couch.post<BulkResult[]>("/_bulk_docs", { docs });
+  return res.data;
+}
