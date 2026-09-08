@@ -50,7 +50,7 @@ date,account,amount,category,note,payee
 <<<END>>>
 
 Reglas:
-- date: YYYY-MM-DD HH:MM:SS en hora local; si no hay hora exacta usa 12:00:00
+- date: YYYY-MM-DD HH:MM:SS en hora local; si no hay hora exacta usa 12:00:00\n- Si el cuerpo no dice la fecha, usa la de "Recibido" que viene arriba. NO preguntes por la fecha: muchos avisos no la traen en el texto y esa es la fecha en que el banco lo envió.
 - amount: negativo = gasto, positivo = ingreso
 - Categorías con coma van entre comillas en el CSV
 - Si no reconoces la cuenta por terminación de tarjeta, pregunta en lugar de inventar
@@ -97,6 +97,30 @@ export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-4-5-2
  * bigger is marketing bloat that can blow the context. */
 const MAX_BODY_CHARS = 8_000;
 
+/** Share of the budget spent on the opening of the body. */
+const HEAD_SHARE = 0.7;
+
+/**
+ * Trims an over-long body from the middle, not the end.
+ *
+ * Mercado Pago's notifications run 17,000 characters of markup around one line
+ * of fact. Keeping only the opening cost the beneficiary's name, which sits
+ * past the cap — five questions in three weeks were "el correo está truncado y
+ * no veo esos datos", every one of them about a movement whose amount the model
+ * had read correctly at character 3,915.
+ *
+ * The head carries the amount and the subject matter; the tail carries the
+ * signature block, the recipient and the reference. Dropping the middle keeps
+ * both for the same budget.
+ */
+export function clampBody(text: string, max = MAX_BODY_CHARS): string {
+  if (text.length <= max) return text;
+  const head = Math.floor(max * HEAD_SHARE);
+  const tail = max - head;
+  const dropped = text.length - max;
+  return `${text.slice(0, head)}\n…(se omitieron ${dropped} caracteres del centro)…\n${text.slice(-tail)}`;
+}
+
 /** Optional gate consulted before writing: return a reason string to veto the
  * write (e.g. an equivalent record already exists in Wallet). */
 export type WalletDedupCheck = (
@@ -135,13 +159,16 @@ export function buildEmailPrompt(payload: EmailPayload): string {
   const rulesSection = learnedRules
     ? `Reglas aprendidas del usuario (respétalas SIEMPRE):\n${learnedRules}\n\n`
     : "";
-  const body = payload.text.length > MAX_BODY_CHARS
-    ? `${payload.text.slice(0, MAX_BODY_CHARS)}\n…(truncado)`
-    : payload.text;
+  const body = clampBody(payload.text);
   return (
     `${rulesSection}El usuario recibió el siguiente correo bancario. Analízalo y extrae las transacciones.\n\n` +
     `De: ${payload.from}\n` +
     `Asunto: ${payload.subject}\n` +
+    // The envelope date. Many notifications state no date anywhere in the body
+    // — Mercado Pago's "Ya enviamos tu transferencia de $700" is the whole
+    // message — and the model asked the user for a date that was never going to
+    // be there, while this was on the payload the whole time.
+    `Recibido: ${payload.date ?? "(fecha desconocida)"}\n` +
     `---\n${body}\n---\n\n` +
     `Si contiene transacciones, propón el CSV. Si no es transaccional (marketing, OTP, aviso), responde solo: NO_TRANSACTION`
   );
