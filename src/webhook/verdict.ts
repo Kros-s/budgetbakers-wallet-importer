@@ -104,3 +104,27 @@ export function challengeNoTransaction(input: {
 
   return null;
 }
+
+/**
+ * True when the reply is not a question but a finding: the movement the email
+ * announces is already in Wallet.
+ *
+ * The prompt gives the model the matching records, so it can reach the right
+ * conclusion — "Sí, ya está registrado: … No propongo CSV." — and the pipeline
+ * then filed that conclusion as a *question* and asked the user to answer it.
+ * Three of those sat in the queue for two weeks; nothing could ever resolve
+ * them, because there was nothing left to resolve.
+ *
+ * A question mark disqualifies the text outright. "¿Ya está registrado?" is the
+ * model asking, not concluding, and the two must never collapse into one: the
+ * cost of reading a question as a finding is a movement dropped in silence.
+ */
+export function claimsAlreadyRecorded(responseText: string): boolean {
+  if (responseText.includes("?") || responseText.includes("¿")) return false;
+  const flat = responseText
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+  return /\bya\s+(?:esta|estaba|fue|quedo|lo\s+tengo|los\s+tengo)\s*(?:registrad[oa]s?|en\s+wallet)/.test(flat)
+    || /\bya\s+(?:esta|estaba)\s+en\s+wallet\b/.test(flat);
+}

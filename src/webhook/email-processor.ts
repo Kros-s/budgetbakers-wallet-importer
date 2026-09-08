@@ -8,8 +8,11 @@ import { writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
-import { challengeNoTransaction, parseVerdict } from "./verdict.js";
-import { senderInstitution } from "../bot/email-facts.js";
+import { challengeNoTransaction, claimsAlreadyRecorded, parseVerdict } from "./verdict.js";
+import { findExistingByAmount } from "./wallet-context.js";
+import { judge } from "./pending-audit.js";
+import { questionAmountCents } from "../bot/pending-view.js";
+import { movementDate, senderInstitution } from "../bot/email-facts.js";
 import { logVerdict } from "./verdict-log.js";
 import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 
@@ -112,7 +115,13 @@ export interface EmailDeps {
 }
 
 export interface ProcessResult {
-  status: "written" | "no_transaction" | "pending_confirmation" | "duplicate" | "clarification";
+  status:
+    | "written"
+    | "no_transaction"
+    | "pending_confirmation"
+    | "duplicate"
+    | "clarification"
+    | "already_recorded";
   written: number;
   costUsd: number | null;
   /** CouchDB ids of the records written (batch ledger / undo support). */
@@ -143,6 +152,54 @@ function buildSuccessMessage(rows: ReturnType<typeof parseCsv>): string {
     return `${sign} $${amt} · ${r.payee || r.note || r.category} → ${r.account}`;
   });
   return `✅ ${rows.length} registro${rows.length === 1 ? "" : "s"} guardado${rows.length === 1 ? "" : "s"}:\n${lines.join("\n")}`;
+}
+
+/**
+ * Confirms against Wallet that the movement really is already booked.
+ *
+ * Returns the matching record when it is, or null to keep asking. Null on any
+ * doubt and null on any failure: the model's word is what got us here, and a
+ * check that cannot run must never be what closes a movement.
+ */
+async function confirmAlreadyRecorded(
+  deps: EmailDeps,
+  payload: EmailPayload,
+  reply: string
+): Promise<string | null> {
+  try {
+    const namesById: Record<string, string> = {};
+    for (const [name, id] of Object.entries(deps.lookup.accounts)) namesById[id] = name;
+
+    // The same amount-selection rule the queue uses: the figure the reply
+    // names, falling back to the email only when it names exactly one.
+    const cents = questionAmountCents({
+      chatId: deps.notificationChatId,
+      emailFrom: payload.from,
+      emailSubject: payload.subject,
+      emailText: payload.text,
+      claudeQuestion: reply,
+      createdAt: Date.now(),
+    });
+    if (!cents) return null;
+
+    const matches = await findExistingByAmount(deps.couch, [cents], namesById);
+    const verdict = judge({
+      shortId: 0,
+      amountCents: cents,
+      movementDate: movementDate(payload.text),
+      matches,
+    });
+    if (!verdict.resolved) return null;
+
+    const hit = verdict.matches[0];
+    const money = `$${(cents / 100).toLocaleString("es-MX", { minimumFractionDigits: 2 })}`;
+    return `${money} · ${hit.recordDate.slice(0, 10)} · ${hit.accountName}${hit.payee ? ` · ${hit.payee.slice(0, 24)}` : ""} (${verdict.reason})`;
+  } catch (err) {
+    console.error(
+      `[email] no se pudo confirmar contra Wallet: ${err instanceof Error ? err.message : err}`
+    );
+    return null;
+  }
 }
 
 export async function processEmail(
@@ -203,6 +260,28 @@ export async function processEmail(
 
   // Claude asked a clarifying question — persist context to disk and notify user
   if (!csv) {
+    // Unless it is not a question at all. The prompt hands the model the
+    // matching Wallet records, so it can answer "sí, ya está registrado … no
+    // propongo CSV" — and filing that as a question put three of them in the
+    // queue with nothing that could ever resolve them.
+    //
+    // The model saying so is one opinion, and no single opinion closes a
+    // movement here. Confirm it against Wallet with the same judgement /audit
+    // uses; when the records do not back the claim, it stays a question.
+    if (claimsAlreadyRecorded(effectiveText)) {
+      const settled = await confirmAlreadyRecorded(deps, payload, effectiveText);
+      if (settled) {
+        console.log(`[email] ya registrado — ${settled}`);
+        await sendSafeMessage(
+          bot.telegram,
+          notificationChatId,
+          `✅ *Ya estaba registrado* — ${escapeMarkdown(senderInstitution(payload.from))}\n\n${escapeMarkdown(settled)}\n\n_No se guardó nada ni se agregó a la cola._`
+        );
+        return { status: "already_recorded", written: 0, costUsd: result.costUsd };
+      }
+      console.log(`[email] dijo "ya registrado" pero Wallet no lo confirma — se pregunta`);
+    }
+
     const sent = await sendSafeMessage(
       bot.telegram,
       notificationChatId,

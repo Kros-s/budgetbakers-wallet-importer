@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { bodyShowsMovement, challengeNoTransaction, parseVerdict } from "../../webhook/verdict.js";
+import { bodyShowsMovement, challengeNoTransaction, parseVerdict, claimsAlreadyRecorded } from "../../webhook/verdict.js";
 
 // ── parseVerdict ────────────────────────────────────────────────────────────
 
@@ -114,4 +114,38 @@ test("the token is recognised at the end, which is how agreement is phrased", ()
 
 test("a trailing mention inside a sentence is not a verdict", () => {
   assert.equal(parseVerdict("¿Debo marcarlo NO_TRANSACTION o registrarlo?").isNoTransaction, false);
+});
+
+// The three real replies that sat in the queue for two weeks with nothing left
+// to resolve, verbatim from data/bot/pending-clarifications.json on 2026-09-07.
+test("a reply concluding the movement is already booked is a finding, not a question", () => {
+  assert.equal(claimsAlreadyRecorded(
+    "Sí, ya está registrado: 2026-08-23 10:04 · $17,521.00 · Nu crédito → Banorte débito (traspaso). " +
+    "Coincide exactamente en monto, fecha y hora. No propongo CSV."
+  ), true);
+  assert.equal(claimsAlreadyRecorded(
+    "Sí, ya está registrado: 2026-08-23 10:04 · $17,521.00 · Nu crédito ← Banorte débito (traspaso). " +
+    "Mismo monto/fecha/hora, aunque el origen registrado fue Banorte débito (no Bancomer) — " +
+    "coincide con el correo de Banorte que ya cerramos antes. Se cierra este también, no propongo CSV."
+  ), true);
+  assert.equal(claimsAlreadyRecorded(
+    "Sí, ya está registrado: 2026-08-24 06:24 · $11,000.00 · Banorte débito → Uala (traspaso). " +
+    "Coincide exactamente en monto, fecha y hora. No propongo CSV."
+  ), true);
+});
+
+test("a question mark keeps it a question, however much it sounds like a finding", () => {
+  // Reading this as "already booked" would drop the movement in silence, which
+  // is strictly worse than asking one more time.
+  assert.equal(claimsAlreadyRecorded("¿Ya está registrado este traspaso de $17,521.00?"), false);
+  assert.equal(claimsAlreadyRecorded(
+    "Creo que ya está registrado, pero ¿de qué cuenta salió?"
+  ), false);
+});
+
+test("real questions are never mistaken for a finding", () => {
+  assert.equal(claimsAlreadyRecorded(
+    "¿A qué cuenta de Banorte corresponde la terminación ****9748?"
+  ), false);
+  assert.equal(claimsAlreadyRecorded("Falta el monto de la compra."), false);
 });
