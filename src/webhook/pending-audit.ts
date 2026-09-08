@@ -110,8 +110,13 @@ export interface SiblingCandidate {
   /** Sending institution, as `senderInstitution` names it. */
   institution: string;
   amountCents: number;
-  /** The movement date as the email states it, when it states one. */
+  /**
+   * The movement date as the email states it, with the time when it gives one.
+   * Two notifications of one operation agree to the second.
+   */
   movementDate: string | null;
+  /** The bank's own id for the operation — reference, folio, clave de rastreo. */
+  reference: string | null;
   createdAt: number;
 }
 
@@ -140,6 +145,27 @@ export function findSiblingQuestion(
   pending: SiblingCandidate[]
 ): SiblingCandidate | null {
   if (!incoming.amountCents) return null;
+
+  // The bank's own reference beats every heuristic below it. Two notifications
+  // carrying the same reference, the same amount and the same instant are one
+  // operation no matter who sent them — and Banorte sends both an "Enviaste"
+  // and a "Recibiste" for a single SPEI, which the institution rule below
+  // would never merge because both come from Banorte.
+  //
+  // All three must agree. Banorte derives the reference from the date
+  // (260825 for 25-ago-2026), so two different transfers on one day share it;
+  // the instant, printed to the second, is what tells them apart.
+  if (incoming.reference && incoming.movementDate) {
+    const sameOperation = pending.filter(
+      (q) =>
+        q.shortId !== incoming.shortId &&
+        q.amountCents === incoming.amountCents &&
+        q.reference === incoming.reference &&
+        q.movementDate === incoming.movementDate
+    );
+    if (sameOperation.length === 1) return sameOperation[0];
+  }
+
   const isRound = incoming.amountCents % 100 === 0;
 
   const siblings = pending.filter((q) => {

@@ -53,7 +53,8 @@ test("a distinctive amount resolves even without a date", () => {
 
 const sibling = (over: Partial<SiblingCandidate> = {}): SiblingCandidate => ({
   shortId: 1, institution: "Banorte", amountCents: 5_875_301,
-  movementDate: "04/Sep/2026", createdAt: Date.parse("2026-09-05T02:00:00Z"), ...over,
+  movementDate: "04/Sep/2026", reference: null,
+  createdAt: Date.parse("2026-09-05T02:00:00Z"), ...over,
 });
 
 test("one SPEI seen from both banks is a single question", () => {
@@ -104,5 +105,40 @@ test("two possible siblings means the merge is itself a guess", () => {
     sibling({ shortId: 1, institution: "Banorte" }),
     sibling({ shortId: 2, institution: "Bancomer" }),
   ]);
+  assert.equal(found, null);
+});
+
+test("the bank's own reference merges two notifications of one SPEI", () => {
+  // Banorte sends an "Enviaste" and a "Recibiste" for a single transfer, both
+  // from banorte.com — the different-institution rule would never merge them.
+  // Real pair: $15,000 on 25-ago-2026, reference 260825, same second.
+  const shared = {
+    institution: "Banorte", amountCents: 1_500_000,
+    movementDate: "25/Ago/2026 a las 14:47:01", reference: "260825",
+  };
+  const found = findSiblingQuestion(
+    sibling({ ...shared, shortId: 27 }),
+    [sibling({ ...shared, shortId: 26 })]
+  );
+  assert.equal(found?.shortId, 26);
+});
+
+test("two transfers on one day are not merged by a date-derived reference", () => {
+  // Banorte builds the reference from the date, so 260825 is shared by every
+  // transfer that day. The instant, printed to the second, separates them.
+  const base = { institution: "Banorte", amountCents: 1_500_000, reference: "260825" };
+  const found = findSiblingQuestion(
+    sibling({ ...base, shortId: 27, movementDate: "25/Ago/2026 a las 19:03:44" }),
+    [sibling({ ...base, shortId: 26, movementDate: "25/Ago/2026 a las 14:47:01" })]
+  );
+  assert.equal(found, null);
+});
+
+test("a shared reference on different amounts is not one operation", () => {
+  const base = { institution: "Banorte", reference: "260825", movementDate: "25/Ago/2026 a las 14:47:01" };
+  const found = findSiblingQuestion(
+    sibling({ ...base, shortId: 27, amountCents: 2_615_100 }),
+    [sibling({ ...base, shortId: 26, amountCents: 1_500_000 })]
+  );
   assert.equal(found, null);
 });

@@ -13,7 +13,7 @@ import { findExistingByAmount } from "./wallet-context.js";
 import { findSiblingQuestion, judge } from "./pending-audit.js";
 import type { SiblingCandidate } from "./pending-audit.js";
 import { questionAmountCents } from "../bot/pending-view.js";
-import { movementDate, senderInstitution } from "../bot/email-facts.js";
+import { extractFacts, movementDate, senderInstitution } from "../bot/email-facts.js";
 import { logVerdict } from "./verdict-log.js";
 import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 
@@ -256,6 +256,7 @@ function pendingSiblings(): SiblingCandidate[] {
     institution: senderInstitution(entry.emailFrom),
     amountCents: questionAmountCents(entry),
     movementDate: movementDate(entry.emailText),
+    reference: extractFacts(entry.emailText).references[0] ?? null,
     createdAt: entry.createdAt,
   }));
 }
@@ -365,6 +366,7 @@ export async function processEmail(
         institution: senderInstitution(payload.from),
         amountCents: questionAmountCents(entry),
         movementDate: movementDate(payload.text),
+        reference: extractFacts(payload.text).references[0] ?? null,
         createdAt: entry.createdAt,
       },
       pendingSiblings()
