@@ -20,8 +20,8 @@ import { escapeMarkdown, sendSafeMessage } from "../bot/telegram-safe.js";
 /** Shared account/category catalog — used by the email prompt and the
  * statement reconciler so both speak the same names. */
 export const CATALOG_PROMPT = `Cuentas disponibles (usa el nombre exacto):
-Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest
-Nota: "Banorte débito" = débito ****5933; "Banorte" = crédito ****4033; "Platinum Credit Card" = AmEx Platinum
+Wallet, Klar, BITSO, Cetes Danielle, Bancomer, NuBank Débito, FinSus, Banorte débito, MIFEL, Uala, Revolut, Afore, Costco, American Express, Platinum Credit Card, Nu crédito, Banorte, Meli, DolarApp, Stocks, GBM, PPR GBM, Cetes, Mercado pago, Open bank, DiDi cuenta, Binance, Pluxee, Zillow Invest, Plata Card
+Nota: "Banorte débito" = débito ****5933; "Banorte" = crédito ****4033; "Platinum Credit Card" = AmEx Platinum\nNota: "Plata Card" recibe por STP y tiene DOS terminaciones, ****1809 y ****8105 — las dos son la misma cuenta de Wallet. Plata tiene cuenta principal y cuenta de ahorros: un movimiento ENTRE ellas no sale de la institución y NO se registra.
 
 Categorías disponibles (usa el nombre exacto):
 Groceries, "Restaurant, fast-food", "Bar, cafe", "Food & Drinks", Candy, Despensa,
