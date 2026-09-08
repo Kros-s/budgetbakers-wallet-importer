@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   chunkLines, formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer,
-  parseAnswers, plainExcerpt, questionAmountCents, sortByImportance,
+  parseAnswers, parseIdSpec, plainExcerpt, questionAmountCents, sortByImportance,
 } from "../../bot/pending-view.js";
 import type { PendingItem } from "../../bot/pending-view.js";
 
@@ -182,4 +182,22 @@ test("content from the email cannot break the message formatting", () => {
   // Y el formato propio sigue intacto.
   assert.match(out, /\*#40\*/);
   assert.match(out, /\*Lo que falta\*/);
+});
+
+test("handles are read with the # the listing prints", () => {
+  assert.deepEqual(parseIdSpec("#24"), [24]);
+  assert.deepEqual(parseIdSpec("20, 21 ,25"), [20, 21, 25]);
+  assert.deepEqual(parseIdSpec("#44,#45"), [44, 45]);
+});
+
+test("a handle repeated in one spec is only acted on once", () => {
+  // Closing twice would report a phantom "not in the queue" for the second.
+  assert.deepEqual(parseIdSpec("24,24,#24"), [24]);
+});
+
+test("anything that is not a positive handle is dropped, never coerced", () => {
+  // Number("") is 0 and Number("N/A") is NaN; acting on either would report
+  // success while closing nothing, or land on a question nobody named.
+  assert.deepEqual(parseIdSpec("24,,N/A,-3,0,2.5"), [24]);
+  assert.deepEqual(parseIdSpec(""), []);
 });

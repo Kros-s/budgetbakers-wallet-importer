@@ -36,6 +36,24 @@ export function questionAmountCents(entry: ClarificationEntry): number {
 }
 
 /**
+ * The handles an operator names, from what they actually type.
+ *
+ * Tolerates the `#` every listing prints and stray spaces, because a handle
+ * copied out of one carries them. Anything that is not a positive integer is
+ * dropped rather than coerced: `Number("")` is 0 and `Number("N/A")` is NaN,
+ * and acting on handle 0 or NaN would report success while closing nothing —
+ * or land on a question the operator never named.
+ */
+export function parseIdSpec(spec: string): number[] {
+  const seen = new Set<number>();
+  for (const part of spec.split(",")) {
+    const n = Number(part.trim().replace(/^#/, ""));
+    if (Number.isInteger(n) && n > 0) seen.add(n);
+  }
+  return [...seen];
+}
+
+/**
  * Biggest amounts first, then oldest.
  *
  * Money order, not arrival order: a $33,750 transfer matters more than a $55
