@@ -273,7 +273,7 @@ async function main() {
   const { messages: full } = await fetchWindow(args.folder, from, to, wanted);
   const bodyByUid = new Map(full.map((m) => [m.uid, m] as const));
 
-  const counts = { written: 0, duplicate: 0, no_transaction: 0, pending: 0, clarification: 0, already: 0, failed: 0 };
+  const counts = { written: 0, duplicate: 0, no_transaction: 0, pending: 0, clarification: 0, already: 0, merged: 0, failed: 0 };
   const succeededUids: number[] = [];
   // Set when a usage limit cuts the run short. Everything not reached stays
   // untouched: no failed marks, no consumed attempts, watermark not advanced.
@@ -307,6 +307,7 @@ async function main() {
       else if (result.status === "pending_confirmation") counts.pending++;
       else if (result.status === "clarification") counts.clarification++;
       else if (result.status === "already_recorded") counts.already++;
+      else if (result.status === "merged_question") counts.merged++;
       markUidProcessed(ledger, env.uid);
       succeededUids.push(env.uid);
     } catch (err) {
@@ -414,6 +415,7 @@ async function main() {
     `✅ Escritos: ${counts.written}\n` +
     `🔁 Duplicados evitados: ${counts.duplicate}\n` +
     (counts.already > 0 ? `✅ Ya estaban registrados: ${counts.already}\n` : "") +
+    (counts.merged > 0 ? `🔗 Preguntas fusionadas (mismo movimiento, dos bancos): ${counts.merged}\n` : "") +
     `🚫 Bloqueados (clasificador): ${blocked.length}\n` +
     `▫️ Sin transacción: ${counts.no_transaction}\n` +
     `📋 Nuevas propuestas: ${counts.pending} · 💬 Nuevas aclaraciones: ${counts.clarification}\n` +

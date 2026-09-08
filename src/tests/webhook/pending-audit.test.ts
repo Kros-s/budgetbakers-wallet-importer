@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { judge, parseLooseDate } from "../../webhook/pending-audit.js";
+import { judge, parseLooseDate, findSiblingQuestion } from "../../webhook/pending-audit.js";
+import type { SiblingCandidate } from "../../webhook/pending-audit.js";
 import type { ExistingRecord } from "../../webhook/wallet-context.js";
 
 const rec = (o: Partial<ExistingRecord> = {}): ExistingRecord => ({
@@ -48,4 +49,60 @@ test("a round amount with several identical records is left to the user", () => 
 test("a distinctive amount resolves even without a date", () => {
   const v = judge({ shortId: 28, amountCents: 2_585_673, movementDate: null, matches: [rec({ amountCents: 2_585_673 })] });
   assert.equal(v.resolved, true);
+});
+
+const sibling = (over: Partial<SiblingCandidate> = {}): SiblingCandidate => ({
+  shortId: 1, institution: "Banorte", amountCents: 5_875_301,
+  movementDate: "04/Sep/2026", createdAt: Date.parse("2026-09-05T02:00:00Z"), ...over,
+});
+
+test("one SPEI seen from both banks is a single question", () => {
+  const incoming = sibling({ shortId: 2, institution: "MIFEL" });
+  const found = findSiblingQuestion(incoming, [sibling({ shortId: 1 })]);
+  assert.equal(found?.shortId, 1);
+});
+
+test("the same bank asking twice is two movements, not one", () => {
+  // Two genuine charges of equal value at one institution is ordinary; merging
+  // them would lose the second for good.
+  const incoming = sibling({ shortId: 2 });
+  assert.equal(findSiblingQuestion(incoming, [sibling({ shortId: 1 })]), null);
+});
+
+test("notifications too far apart are not the same movement", () => {
+  const incoming = sibling({
+    shortId: 2, institution: "MIFEL",
+    createdAt: Date.parse("2026-09-09T02:00:00Z"),
+  });
+  assert.equal(findSiblingQuestion(incoming, [sibling({ shortId: 1 })]), null);
+});
+
+test("a round amount needs both emails to state the same date", () => {
+  const base = { amountCents: 500_000, movementDate: null };
+  // $5,000 moves between accounts constantly; without dates this is a guess.
+  assert.equal(
+    findSiblingQuestion(
+      sibling({ ...base, shortId: 2, institution: "MIFEL" }),
+      [sibling({ ...base, shortId: 1 })]
+    ),
+    null
+  );
+  // With both dates agreeing, it is the same movement.
+  const dated = { amountCents: 500_000, movementDate: "03/Sep/2026" };
+  assert.equal(
+    findSiblingQuestion(
+      sibling({ ...dated, shortId: 2, institution: "MIFEL" }),
+      [sibling({ ...dated, shortId: 1 })]
+    )?.shortId,
+    1
+  );
+});
+
+test("two possible siblings means the merge is itself a guess", () => {
+  const incoming = sibling({ shortId: 3, institution: "MIFEL" });
+  const found = findSiblingQuestion(incoming, [
+    sibling({ shortId: 1, institution: "Banorte" }),
+    sibling({ shortId: 2, institution: "Bancomer" }),
+  ]);
+  assert.equal(found, null);
 });

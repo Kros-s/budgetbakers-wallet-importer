@@ -10,7 +10,8 @@ import { runClaude } from "../bot/claude-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { challengeNoTransaction, claimsAlreadyRecorded, parseVerdict } from "./verdict.js";
 import { findExistingByAmount } from "./wallet-context.js";
-import { judge } from "./pending-audit.js";
+import { findSiblingQuestion, judge } from "./pending-audit.js";
+import type { SiblingCandidate } from "./pending-audit.js";
 import { questionAmountCents } from "../bot/pending-view.js";
 import { movementDate, senderInstitution } from "../bot/email-facts.js";
 import { logVerdict } from "./verdict-log.js";
@@ -68,7 +69,7 @@ import {
   setPending,
   setPendingMessageId,
 } from "../bot/session.js";
-import { storeClarification } from "./clarification-store.js";
+import { linkMessageId, listClarifications, storeClarification } from "./clarification-store.js";
 import { findDuplicate, trackTransaction } from "./daily-tracker.js";
 import { getLearnedRules, appendLearnedRule, extractRuleBlocks } from "./learned-rules.js";
 import type { BotConfig } from "../bot/config.js";
@@ -121,7 +122,8 @@ export interface ProcessResult {
     | "pending_confirmation"
     | "duplicate"
     | "clarification"
-    | "already_recorded";
+    | "already_recorded"
+    | "merged_question";
   written: number;
   costUsd: number | null;
   /** CouchDB ids of the records written (batch ledger / undo support). */
@@ -200,6 +202,17 @@ async function confirmAlreadyRecorded(
     );
     return null;
   }
+}
+
+/** The queue, in the shape the sibling check compares against. */
+function pendingSiblings(): SiblingCandidate[] {
+  return listClarifications().map(({ entry }) => ({
+    shortId: entry.shortId ?? 0,
+    institution: senderInstitution(entry.emailFrom),
+    amountCents: questionAmountCents(entry),
+    movementDate: movementDate(entry.emailText),
+    createdAt: entry.createdAt,
+  }));
 }
 
 export async function processEmail(
@@ -282,12 +295,7 @@ export async function processEmail(
       console.log(`[email] dijo "ya registrado" pero Wallet no lo confirma — se pregunta`);
     }
 
-    const sent = await sendSafeMessage(
-      bot.telegram,
-      notificationChatId,
-      `📧 *Correo de ${escapeMarkdown(senderInstitution(payload.from))}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${effectiveText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${ruleNote}`
-    );
-    storeClarification(sent.message_id, {
+    const entry = {
       chatId: notificationChatId,
       emailFrom: payload.from,
       emailSubject: payload.subject,
@@ -297,7 +305,42 @@ export async function processEmail(
       emailFolder: payload.folder,
       claudeQuestion: effectiveText,
       createdAt: Date.now(),
-    });
+    };
+
+    // A SPEI notifies twice — the bank that sent it and the bank that received
+    // it — and each notification became its own question. $26,151 and $15,000
+    // were each asked twice in one week while the summary said, correctly,
+    // that they were probably one movement. When the queue already asks about
+    // this one, the new message becomes another way to answer it instead.
+    const twin = findSiblingQuestion(
+      {
+        shortId: 0,
+        institution: senderInstitution(payload.from),
+        amountCents: questionAmountCents(entry),
+        movementDate: movementDate(payload.text),
+        createdAt: entry.createdAt,
+      },
+      pendingSiblings()
+    );
+
+    const twinNote = twin
+      ? `\n\n_Es el mismo movimiento que la pregunta #${twin.shortId} — contestar aquí o allá la cierra una sola vez._`
+      : "";
+    const sent = await sendSafeMessage(
+      bot.telegram,
+      notificationChatId,
+      `📧 *Correo de ${escapeMarkdown(senderInstitution(payload.from))}*\n\nAsunto: ${escapeMarkdown(payload.subject)}\n\n${effectiveText}\n\n_↩️ Responde **directamente a este mensaje** con los datos faltantes._${twinNote}${ruleNote}`
+    );
+
+    if (twin) {
+      // Reply-to on this message resolves the question it duplicates; the
+      // original keeps working too.
+      linkMessageId(twin.shortId, sent.message_id);
+      console.log(`[email] misma pregunta que #${twin.shortId} — enlazada, no se encola otra`);
+      return { status: "merged_question", written: 0, costUsd: result.costUsd };
+    }
+
+    storeClarification(sent.message_id, entry);
     return { status: "clarification", written: 0, costUsd: result.costUsd };
   }
 
