@@ -6,6 +6,7 @@ import type { Telegraf } from "telegraf";
 import { convertRows, parseCsv, stampMarker } from "../csv.js";
 import { localDayStr } from "../batch/ledger.js";
 import { applyMerchantHistory, type MerchantLookup } from "./merchant-history.js";
+import { referenceDate } from "./queue-audit.js";
 import { writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { runClaude } from "../bot/claude-runner.js";
@@ -241,12 +242,14 @@ async function confirmAlreadyRecorded(
     if (!cents) return null;
 
     const matches = await findExistingByAmount(deps.couch, [cents], namesById);
+    // Same fallback as the queue audit: an undated body is judged against when
+    // the email arrived, never against no date at all — and judged strictly.
+    const reference = referenceDate({ emailText: payload.text, emailDate: payload.date, createdAt: Date.now() });
     const verdict = judge({
       shortId: 0,
       amountCents: cents,
-      // Same fallback as the queue audit: an undated body is judged against
-      // when the email arrived, never against no date at all.
-      movementDate: movementDate(payload.text) ?? payload.date ?? new Date().toISOString(),
+      movementDate: reference.date,
+      dateIsArrival: reference.isArrival,
       matches,
     });
     if (!verdict.resolved) return null;

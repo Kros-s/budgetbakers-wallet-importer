@@ -13,11 +13,23 @@ import type { ExistingRecord } from "./wallet-context.js";
 /** How far the recorded date may sit from the date the email states. */
 const DATE_SLACK_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * How far it may sit from when the email merely arrived. Tighter, because an
+ * arrival date says when a bank got round to writing, not when money moved —
+ * weaker evidence, so it buys less room.
+ */
+const ARRIVAL_SLACK_MS = 3 * 24 * 60 * 60 * 1000;
+
 export interface AuditCandidate {
   shortId: number;
   amountCents: number;
   /** The movement date as the email states it, when it states one. */
   movementDate: string | null;
+  /**
+   * True when `movementDate` is when the email arrived rather than a date the
+   * email states. Judged more strictly — see `judge`.
+   */
+  dateIsArrival?: boolean;
   matches: ExistingRecord[];
 }
 
@@ -66,6 +78,25 @@ export function judge(candidate: AuditCandidate): AuditVerdict {
   }
 
   const stated = parseLooseDate(movementDate);
+  if (stated && candidate.dateIsArrival) {
+    // Only an arrival date to go on. A round figure is exactly the kind that
+    // repeats across accounts within days — on 16-sep a $3,000 Mercado Pago
+    // transfer matched a $3,000 Banorte-to-Bancomer transfer this way, and a
+    // $150 card payment an OXXO charge — so a round amount is never closed on
+    // an arrival date alone. A distinctive one must land within three days.
+    if (amountCents % 100 === 0) {
+      return {
+        shortId, resolved: false, matches,
+        reason: "monto redondo y el correo no dice la fecha: no lo cierro solo",
+      };
+    }
+    const near = matches.filter(
+      (m) => Math.abs(Date.parse(m.recordDate) - stated.getTime()) <= ARRIVAL_SLACK_MS
+    );
+    return near.length > 0
+      ? { shortId, resolved: true, matches: near, reason: "monto exacto, registrado cerca de cuando llegó el correo" }
+      : { shortId, resolved: false, matches, reason: "hay un registro con ese monto pero en otra fecha" };
+  }
   if (stated) {
     const near = matches.filter(
       (m) => Math.abs(Date.parse(m.recordDate) - stated.getTime()) <= DATE_SLACK_MS

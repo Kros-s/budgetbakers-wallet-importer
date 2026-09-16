@@ -124,3 +124,19 @@ test("the same undated email does close against a match from its own day", async
   const audit = await auditQueue(couch, lookup, { close: true });
   assert.equal(audit.resolved.length, 1);
 });
+
+test("a round amount is never closed on an arrival date alone — the #32 case", async () => {
+  // A $3,000 Mercado Pago transfer, undated, arriving on 29-ago. Wallet holds a
+  // $3,000 Banorte-to-Bancomer transfer from 23-ago: same figure, unrelated.
+  storeClarification(3003, {
+    chatId: 7, emailFrom: "notificaciones@mercadopago.com", emailSubject: "¡Enviamos tu transferencia!",
+    emailText: "Enviamos tu transferencia de $ 3,000",
+    emailDate: "2026-08-29T18:00:00.000Z",
+    claudeQuestion: "¿Cuál es el destinatario de esta transferencia de $3,000.00?",
+    createdAt: Date.parse("2026-08-29T20:00:00Z"),
+  });
+  const { couch } = fakeCouch([record(300_000, "2026-08-23"), record(300_000, "2026-08-29", "-Account_costco")]);
+  const audit = await auditQueue(couch, lookup, { close: true });
+  assert.equal(audit.resolved.length, 0);
+  assert.equal(listClarifications().length, 1);
+});

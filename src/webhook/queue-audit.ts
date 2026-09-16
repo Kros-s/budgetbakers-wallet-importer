@@ -48,7 +48,8 @@ export interface QueueAuditOptions {
  * The date a question's movement is judged against.
  *
  * The body's own date when it states one; otherwise when the email arrived,
- * which every entry carries. Without this fallback, a body with no date sent
+ * which every entry carries, flagged so `judge` weighs it as the weaker evidence
+ * it is. Without this fallback, a body with no date sent
  * `judge` down its dateless branch, where one match of the same amount is
  * enough — and on 16-sep it matched a $150 payment to the Mercado Pago card
  * from 24-ago against a $150 OXXO charge on the Costco card three weeks later.
@@ -59,8 +60,10 @@ export function referenceDate(entry: {
   emailText: string;
   emailDate?: string;
   createdAt: number;
-}): string {
-  return movementDate(entry.emailText) ?? entry.emailDate ?? new Date(entry.createdAt).toISOString();
+}): { date: string; isArrival: boolean } {
+  const stated = movementDate(entry.emailText);
+  if (stated) return { date: stated, isArrival: false };
+  return { date: entry.emailDate ?? new Date(entry.createdAt).toISOString(), isArrival: true };
 }
 
 export async function auditQueue(
@@ -86,10 +89,12 @@ export async function auditQueue(
   for (const { entry, cents } of items) {
     const matches = existing.filter((m) => m.amountCents === cents);
     if (matches.length === 0) continue;
+    const reference = referenceDate(entry);
     const verdict = judge({
       shortId: entry.shortId!,
       amountCents: cents,
-      movementDate: referenceDate(entry),
+      movementDate: reference.date,
+      dateIsArrival: reference.isArrival,
       matches,
     });
     if (verdict.resolved) {
