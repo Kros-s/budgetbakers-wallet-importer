@@ -62,6 +62,33 @@ export function bodyShowsMovement(body: string): boolean {
   return false;
 }
 
+/**
+ * Subjects written to sell something, not to report a movement.
+ *
+ * American Express sends "Hasta $1,600.00 M.N. de cashback para celebrar" and
+ * "En Chedraui tus Puntos valen 50% más" from the same sender as its charge
+ * alerts. Both carry an amount near a word like "compras", so the challenge
+ * below turned two correct discards into questions in one week.
+ */
+const PROMOTIONAL_SUBJECT =
+  /\b(?:cashback|puntos|promoci[oó]n(?:es)?|ofertas?|descuentos?|beneficios?|meses sin intereses|msi|sorteos?|participa|gana|celebra[rn]?|exclusiv[oa]s?|invitaci[oó]n|aprovecha|te regalamos|recompensas?)\b|\bhasta \$/i;
+
+/**
+ * Wording that reports a movement that already happened to this customer.
+ *
+ * The exception to the promotional rule: "Tu cashback se acreditó: $120" is a
+ * sales subject over a real credit, and that one must still be asked about.
+ */
+// No trailing \b: JavaScript counts "ó" as a non-word character, so a boundary
+// after "acreditó" never matches and the most common wording slipped through.
+const COMPLETED_MOVEMENT =
+  /\b(?:recibiste|enviaste|pagaste|compraste|retiraste|depositamos|te depositaron|se (?:realiz[oó]|aplic[oó]|acredit[oó]|carg[oó]|abon[oó]|efectu[oó])|(?:fue|ha sido) (?:aplicad|acreditad|realizad|cargad|abonad)[oa]|tu (?:pago|compra|transferencia|dep[oó]sito|retiro) (?:de|por)\s)/i;
+
+/** True when an email is selling rather than reporting. */
+export function isPromotion(subject: string, body: string): boolean {
+  return PROMOTIONAL_SUBJECT.test(subject) && !COMPLETED_MOVEMENT.test(body.replace(/\s+/g, " "));
+}
+
 export interface Challenge {
   /** Why the verdict is not being taken at face value. */
   reason: string;
@@ -82,8 +109,9 @@ export function challengeNoTransaction(input: {
 }): Challenge | null {
   const { from, subject, body, reason } = input;
 
-  // The model says no money moved, while the bank that sent it says otherwise.
-  if (classifyEmail(from, subject) === "bank" && bodyShowsMovement(body)) {
+  // The model says no money moved, while the bank that sent it says otherwise —
+  // unless the bank is selling, in which case the model was right.
+  if (classifyEmail(from, subject) === "bank" && bodyShowsMovement(body) && !isPromotion(subject, body)) {
     return {
       reason: "remitente bancario y el cuerpo muestra un monto junto a un verbo de movimiento",
       question:

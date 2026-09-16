@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { bodyShowsMovement, challengeNoTransaction, parseVerdict, claimsAlreadyRecorded } from "../../webhook/verdict.js";
+import { bodyShowsMovement, challengeNoTransaction, parseVerdict, claimsAlreadyRecorded, isPromotion } from "../../webhook/verdict.js";
 
 // ── parseVerdict ────────────────────────────────────────────────────────────
 
@@ -148,4 +148,33 @@ test("real questions are never mistaken for a finding", () => {
     "¿A qué cuenta de Banorte corresponde la terminación ****9748?"
   ), false);
   assert.equal(claimsAlreadyRecorded("Falta el monto de la compra."), false);
+});
+
+// ── Promotions from a bank sender ───────────────────────────────────────────
+
+test("a bank's sales email is not turned into a question — the two Amex cases", () => {
+  // Both came from the Amex sender on 2026-09-09/10 and were filed as #59, #61.
+  for (const subject of [
+    "Hasta $1,600.00 M.N. de cashback para celebrar México viajando",
+    "Marco Antonio En Chedraui tus Puntos valen 50% más",
+  ]) {
+    assert.equal(isPromotion(subject, "Obtén hasta $1,600.00 en tus compras participantes. Aplican términos."), true);
+  }
+});
+
+test("a sales subject over a credit that actually happened is still a movement", () => {
+  assert.equal(
+    isPromotion("Tu cashback del mes", "Se acreditó $120.00 de cashback a tu tarjeta terminación 1002."),
+    false
+  );
+});
+
+test("the $5,000 SPEI is still challenged — its subject reports, it does not sell", () => {
+  assert.equal(
+    isPromotion(
+      "Transferencia a Otros Bancos Nacionales - SPEI",
+      "¡Recibiste una transferencia! Recibiste $5,000.00 MN"
+    ),
+    false
+  );
 });
