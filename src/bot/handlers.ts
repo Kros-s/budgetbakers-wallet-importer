@@ -62,7 +62,8 @@ import { formatPendingDetail, formatPendingIndex, looksLikeHandleAnswer, parseAn
 import { HELP_TEXT } from "./commands.js";
 import { movementDate, senderInstitution } from "./email-facts.js";
 import { addIgnorePattern, listIgnorePatterns, matchesPattern, relaxAccents, toLiteralPattern } from "../webhook/ignore-rules.js";
-import { formatVerdict, judge } from "../webhook/pending-audit.js";
+import { formatVerdict } from "../webhook/pending-audit.js";
+import { auditQueue } from "../webhook/queue-audit.js";
 import { parseVerdict } from "../webhook/verdict.js";
 import { buildIgnorePreview, formatIgnorePreview } from "./ignore-preview.js";
 import { formatStatementsTable } from "./statements-view.js";
@@ -799,34 +800,16 @@ export function registerHandlers(deps: HandlerDeps): void {
   });
 
   bot.command("audit", async (ctx) => {
-    const items = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id);
-    if (items.length === 0) {
+    const pendingCount = ensureShortIds().filter((i) => i.entry.chatId === ctx.chat.id).length;
+    if (pendingCount === 0) {
       await ctx.reply("✅ No hay aclaraciones pendientes.");
       return;
     }
-    await ctx.reply(`🔍 Revisando ${items.length} pendientes contra Wallet…`);
+    await ctx.reply(`🔍 Revisando ${pendingCount} pendientes contra Wallet…`);
 
-    const namesById: Record<string, string> = {};
-    for (const [name, id] of Object.entries(deps.lookup.accounts)) namesById[id] = name;
-
-    const resolved: string[] = [];
-    const doubtful: string[] = [];
-    for (const { entry } of items) {
-      const cents = questionAmountCents(entry);
-      if (!cents) continue;
-      const matches = await findExistingByAmount(deps.couch, [cents], namesById);
-      if (matches.length === 0) continue;
-      const verdict = judge({
-        shortId: entry.shortId!, amountCents: cents,
-        movementDate: movementDate(entry.emailText), matches,
-      });
-      if (verdict.resolved) {
-        takeByShortId(entry.shortId!, "ya estaba en Wallet");
-        resolved.push(formatVerdict(verdict));
-      } else {
-        doubtful.push(formatVerdict(verdict));
-      }
-    }
+    const audit = await auditQueue(deps.couch, deps.lookup, { close: true, chatId: ctx.chat.id });
+    const resolved = audit.resolved.map(formatVerdict);
+    const doubtful = audit.doubtful.map(formatVerdict);
 
     if (resolved.length === 0 && doubtful.length === 0) {
       await ctx.reply("Nada que conciliar: ninguna pendiente coincide con un registro existente.");

@@ -40,6 +40,8 @@ import { runClaude, UsageLimitError } from "../bot/claude-runner.js";
 import { checkRunIntegrity, formatFindings } from "../batch/integrity.js";
 import { pruneBotLogs, pruneLedgers, pruneVerdictLogs } from "../batch/retention.js";
 import { listClarifications } from "../webhook/clarification-store.js";
+import { auditQueue } from "../webhook/queue-audit.js";
+import { formatVerdict } from "../webhook/pending-audit.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
 import { deleteRecords, getRecord } from "../records.js";
@@ -330,6 +332,27 @@ async function main() {
   const exhausted = ledger.uidsFailed.filter((f) => f.attempts >= MAX_ATTEMPTS);
   closeLedger(ledger, paused ? "paused" : counts.failed === 0 ? "complete" : "failed");
 
+  // Before the backlog is counted, so the summary reports the queue as it
+  // actually stands. Banks notify a movement more than once, and one email of a
+  // run can book it while another files a question about it minutes later —
+  // #69 asked where $46,732.53 came from on the night that very payment was
+  // written. A failed audit costs a question that stays open, never the run.
+  let auditedNote = "";
+  try {
+    const audited = await auditQueue(couch, lookup, {
+      close: true,
+      reason: "ya estaba en Wallet (revisión al final de la corrida)",
+    });
+    if (audited.resolved.length > 0) {
+      auditedNote =
+        `🧹 Cerradas por ya estar en Wallet: ${audited.resolved.length}\n` +
+        audited.resolved.map((v) => `   ${formatVerdict(v).split("\n")[0]}`).join("\n") + "\n";
+      console.log(`\n${auditedNote.replace(/\*/g, "")}`);
+    }
+  } catch (err) {
+    console.error(`   ⚠ el audit de la cola no pudo correr: ${err instanceof Error ? err.message : err}`);
+  }
+
   // "Pendientes totales" is the user-facing truth: everything still waiting
   // across ALL runs, not just this run's increments (which mislead after a
   // resumed or partial run).
@@ -419,6 +442,7 @@ async function main() {
     `🚫 Bloqueados (clasificador): ${blocked.length}\n` +
     `▫️ Sin transacción: ${counts.no_transaction}\n` +
     `📋 Nuevas propuestas: ${counts.pending} · 💬 Nuevas aclaraciones: ${counts.clarification}\n` +
+    auditedNote +
     `📮 *Pendientes totales por responder: ${backlog.proposals.length} propuesta(s) · ${backlog.clarifications.length} aclaración(es)*\n` +
     (counts.failed > 0 ? `⚠️ Fallidos (se reintentan): ${counts.failed}\n` : "") +
     (exhausted.length > 0

@@ -18,10 +18,9 @@ import { loadEnvLocal } from "../env.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
 import { ensureShortIds, takeByShortId } from "../webhook/clarification-store.js";
-import { findExistingByAmount } from "../webhook/wallet-context.js";
-import { formatVerdict, judge } from "../webhook/pending-audit.js";
+import { formatVerdict } from "../webhook/pending-audit.js";
+import { auditQueue } from "../webhook/queue-audit.js";
 import { parseIdSpec, questionAmountCents, sortByImportance } from "../bot/pending-view.js";
-import { movementDate } from "../bot/email-facts.js";
 
 function stripMarkdown(text: string): string {
   return text.replace(/```/g, "").replace(/[*_]/g, "");
@@ -61,43 +60,25 @@ async function audit(close: boolean): Promise<void> {
   const couch = buildCouchClient(credentials.replication);
   const lookup = buildLookupMapsFromData(await fetchLookupData(couch));
 
-  const namesById: Record<string, string> = {};
-  for (const [name, id] of Object.entries(lookup.accounts)) namesById[id] = name;
-
-  const items = ensureShortIds();
-  console.log(`🔍 Revisando ${items.length} pendientes contra Wallet…\n`);
-
-  const resolved: string[] = [];
-  const doubtful: string[] = [];
-  for (const { entry } of items) {
-    const cents = questionAmountCents(entry);
-    if (!cents) continue;
-    const matches = await findExistingByAmount(couch, [cents], namesById);
-    if (matches.length === 0) continue;
-    const verdict = judge({
-      shortId: entry.shortId!,
-      amountCents: cents,
-      movementDate: movementDate(entry.emailText),
-      matches,
-    });
-    if (verdict.resolved) {
-      if (close) takeByShortId(entry.shortId!, "ya estaba en Wallet");
-      resolved.push(stripMarkdown(formatVerdict(verdict)));
-    } else {
-      doubtful.push(stripMarkdown(formatVerdict(verdict)));
-    }
-  }
+  console.log(`🔍 Revisando ${ensureShortIds().length} pendientes contra Wallet…\n`);
+  const { resolved, doubtful } = await auditQueue(couch, lookup, { close });
 
   if (resolved.length === 0 && doubtful.length === 0) {
     console.log("Nada que conciliar: ninguna pendiente coincide con un registro existente.");
     return;
   }
   if (resolved.length) {
-    console.log(`Ya registradas (${resolved.length})${close ? " — cerradas" : ""}:\n${resolved.join("\n")}\n`);
+    console.log(
+      `Ya registradas (${resolved.length})${close ? " — cerradas" : ""}:\n` +
+        `${resolved.map((v) => stripMarkdown(formatVerdict(v))).join("\n")}\n`
+    );
   }
   if (doubtful.length) {
     // Never closed on a guess: a wrong close hides a real movement for good.
-    console.log(`Parecidas, pero NO se cierran (${doubtful.length}):\n${doubtful.join("\n")}\n`);
+    console.log(
+      `Parecidas, pero NO se cierran (${doubtful.length}):\n` +
+        `${doubtful.map((v) => stripMarkdown(formatVerdict(v))).join("\n")}\n`
+    );
   }
   if (!close && resolved.length) {
     console.log(`Repite con --close para sacar de la cola las ${resolved.length} ya registradas.`);
