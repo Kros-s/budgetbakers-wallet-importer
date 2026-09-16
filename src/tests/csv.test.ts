@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { toIso, convertRows, parseCsv, rowsToCsv, type CsvRow } from "../csv.js";
+import { toIso, convertRows, parseCsv, rowsToCsv, type CsvRow, stampMarker } from "../csv.js";
 import type { LookupMaps } from "../types.js";
 
 test("toIso parses US short date with space separator", () => {
@@ -426,4 +426,72 @@ test("a pair key does not link two legs of the same account", () => {
   ], maps);
   assert.equal(records.length, 0);
   assert.equal(skipped.length, 2);
+});
+
+// ── Unquoted comma categories ───────────────────────────────────────────────
+
+const KNOWN = ["Groceries", "Phone, cell phone", "Transfer, withdraw", "Restaurant, fast-food", "Others"];
+
+test("an unquoted comma category is rejoined instead of shifting every column", () => {
+  // The real row that waited a week for a button on 2026-09-08.
+  const csv = "date,account,amount,category,note,payee\n" +
+    "2026-09-07 20:04:56,Open bank,-10.00,Phone, cell phone,,Recarga tiempo aire\n";
+  const [row] = parseCsv(csv, KNOWN);
+  assert.equal(row.category, "Phone, cell phone");
+  assert.equal(row.note, "");
+  assert.equal(row.payee, "Recarga tiempo aire");
+});
+
+test("the transfer shift that put the marker in payee is repaired", () => {
+  const csv = "date,account,amount,category,note,payee\n" +
+    "2026-08-15 12:00:00,Costco,33750.00,Transfer, withdraw,[Claude 2026-08-19],\n";
+  const [row] = parseCsv(csv, KNOWN);
+  assert.equal(row.category, "Transfer, withdraw");
+  assert.equal(row.note, "[Claude 2026-08-19]");
+  assert.equal(row.payee, "");
+});
+
+test("a comma in the payee is never joined into the category", () => {
+  // "Groceries, PIER 5" is not a category, so nothing is guessed; the row stays
+  // as the parser always produced it and fails visibly downstream.
+  const csv = "date,account,amount,category,note,payee\n" +
+    "2026-06-17 12:00:00,Bancomer,59485.33,Groceries,,PIER 5, S.A de C.V.\n";
+  const [row] = parseCsv(csv, KNOWN);
+  assert.equal(row.category, "Groceries");
+  assert.equal(row.payee, "PIER 5");
+});
+
+test("without the catalogue, parsing is exactly what it always was", () => {
+  const csv = "date,account,amount,category,note,payee\n" +
+    "2026-09-07 20:04:56,Open bank,-10.00,Phone, cell phone,,Recarga\n";
+  const [row] = parseCsv(csv);
+  assert.equal(row.category, "Phone");
+});
+
+test("a properly quoted comma category is untouched", () => {
+  const csv = "date,account,amount,category,note,payee\n" +
+    '2026-09-07 20:04:56,Open bank,-10.00,"Phone, cell phone",,Recarga\n';
+  const [row] = parseCsv(csv, KNOWN);
+  assert.equal(row.category, "Phone, cell phone");
+  assert.equal(row.payee, "Recarga");
+});
+
+// ── Import marker ───────────────────────────────────────────────────────────
+
+test("a row without the marker gets one, after any note it already had", () => {
+  const rows = stampMarker(
+    [{ note: "" } as CsvRow, { note: "Marlene" } as CsvRow],
+    "2026-09-15"
+  );
+  assert.equal(rows[0].note, "[Claude 2026-09-15]");
+  assert.equal(rows[1].note, "Marlene [Claude 2026-09-15]");
+});
+
+test("an existing marker is never altered, least of all the one undo matches", () => {
+  const rows = stampMarker(
+    [{ note: "[Claude reconcile 2026-07]" } as CsvRow, { note: "x [Claude 2026-09-01]" } as CsvRow],
+    "2026-09-15"
+  );
+  assert.equal(rows[0].note, "[Claude reconcile 2026-07]");
+  assert.equal(rows[1].note, "x [Claude 2026-09-01]");
 });

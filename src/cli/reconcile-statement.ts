@@ -486,7 +486,7 @@ async function main() {
   }
   const { csv } = extractCsvBlock(result.text);
   if (!csv) throw new Error(`Sin bloque CSV en la respuesta:\n${result.text.slice(0, 400)}`);
-  const extracted = parseCsv(csv);
+  const extracted = parseCsv(csv, Object.keys(lookup.categories));
   const claimed = /TOTAL_MOVIMIENTOS:\s*(\d+)/.exec(result.text)?.[1];
   console.log(`Extraídos ${extracted.length} movimiento(s)${claimed ? ` (Claude declara ${claimed})` : ""}.`);
   if (claimed && Number(claimed) !== extracted.length) {

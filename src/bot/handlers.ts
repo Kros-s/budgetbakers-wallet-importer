@@ -24,7 +24,8 @@ import { message } from "telegraf/filters";
 
 import type { AxiosInstance } from "axios";
 import type { LookupMaps } from "../types.js";
-import { convertRows, parseCsv, rowsToCsv } from "../csv.js";
+import { convertRows, parseCsv, rowsToCsv, stampMarker } from "../csv.js";
+import { localDayStr } from "../batch/ledger.js";
 import type { CsvRow } from "../csv.js";
 import { recategorizeRecords, writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
@@ -330,7 +331,7 @@ async function processUserTurn(
   if (csv) {
     let rows: CsvRow[];
     try {
-      rows = parseCsv(csv);
+      rows = stampMarker(parseCsv(csv, Object.keys(deps.lookup.categories)), localDayStr());
     } catch (err) {
       await ctx.reply(
         `⚠️ Claude propuso un CSV pero no pude parsearlo: ${

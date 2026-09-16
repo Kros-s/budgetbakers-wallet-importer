@@ -3,7 +3,8 @@ import { Markup } from "telegraf";
 import type { AxiosInstance } from "axios";
 import type { Telegraf } from "telegraf";
 
-import { convertRows, parseCsv } from "../csv.js";
+import { convertRows, parseCsv, stampMarker } from "../csv.js";
+import { localDayStr } from "../batch/ledger.js";
 import { writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { runClaude } from "../bot/claude-runner.js";
@@ -393,7 +394,7 @@ export async function processEmail(
     return { status: "clarification", written: 0, costUsd: result.costUsd };
   }
 
-  const rows = parseCsv(csv);
+  const rows = stampMarker(parseCsv(csv, Object.keys(lookup.categories)), localDayStr());
   if (rows.length === 0) throw new Error("Claude returned empty CSV block");
 
   const { records, originalRows, skipped } = convertRows(rows, lookup);

@@ -188,7 +188,7 @@ async function main() {
 
     console.log("\nParsing CSV...");
     const raw = fs.readFileSync(resolved, "utf8");
-    const rows = parseCsv(raw);
+    const rows = parseCsv(raw, Object.keys(lookup.maps.categories));
     const { records, originalRows, skipped } = convertRows(rows, lookup.maps);
     log("CSV parsed", {
         rows: rows.length,

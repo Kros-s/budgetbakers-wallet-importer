@@ -309,13 +309,88 @@ function suggestionSuffix(candidates: string[]): string {
  * Parses the custom importer CSV string into raw row objects.
  * Strips the UTF-8 BOM and skips blank lines.
  */
-export function parseCsv(content: string): CsvRow[] {
-  return parse(content.replace(/^\uFEFF/, ""), {
-    columns: true,
+/** Lowercased, with the space around a comma normalised, for set lookups. */
+function categoryKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s*,\s*/g, ", ").replace(/\s+/g, " ");
+}
+
+/**
+ * Rejoins a category the model wrote with an unquoted comma.
+ *
+ * `Phone, cell phone` without quotes is two fields, and everything after it
+ * slides one column: the category becomes "Phone", the note becomes
+ * "cell phone", and the field that no longer fits is dropped without a word.
+ * That is how a $10 top-up waited a week for a button, and how `[Claude …]`
+ * landed in `payee` on two transfers — where `undo` cannot see it.
+ *
+ * Only the category column is repaired, and only into a category that exists.
+ * A comma elsewhere ("PIER 5, S.A de C.V." in a payee) is left alone: joining
+ * it into the category would be a guess, and a wrong guess here writes a
+ * plausible-looking record instead of failing visibly.
+ */
+function repairCategoryColumn(
+  fields: string[],
+  header: string[],
+  commaCategories: Set<string>
+): string[] {
+  const at = header.indexOf("category");
+  if (at === -1 || commaCategories.size === 0) return fields;
+  const out = [...fields];
+  while (out.length > header.length && at + 1 < out.length) {
+    const joined = `${out[at]}, ${out[at + 1]}`;
+    if (!commaCategories.has(categoryKey(joined))) break;
+    out.splice(at, 2, joined.replace(/\s*,\s*/, ", "));
+  }
+  return out;
+}
+
+/**
+ * Parses the importer CSV.
+ *
+ * Pass the category names Wallet knows and rows with an unquoted comma in the
+ * category are repaired; without them parsing is exactly as it always was.
+ */
+export function parseCsv(content: string, knownCategories?: Iterable<string>): CsvRow[] {
+  const records = parse(content.replace(/^\uFEFF/, ""), {
+    columns: false,
     skip_empty_lines: true,
     trim: true,
     relax_column_count: true,
-  }) as CsvRow[];
+  }) as string[][];
+  if (records.length === 0) return [];
+
+  const [header, ...body] = records;
+  const commaCategories = new Set(
+    [...(knownCategories ?? [])].filter((c) => c.includes(",")).map(categoryKey)
+  );
+
+  return body.map((raw) => {
+    const fields = repairCategoryColumn(raw, header, commaCategories);
+    const row: Record<string, string> = {};
+    for (let i = 0; i < header.length && i < fields.length; i++) row[header[i]] = fields[i];
+    return row as unknown as CsvRow;
+  });
+}
+
+/**
+ * Appends the import marker to every row that does not already carry one.
+ *
+ * The prompt used to ask the model for it, and the prompt also says "note y
+ * payee: opcionales" — so on a quiet night it simply did not write it. Four of
+ * eighteen records in one week had no marker, which makes them invisible to
+ * `snapshot undo` and indistinguishable from what the user typed by hand. A
+ * marker that decides whether a mistake is reversible cannot be a suggestion.
+ *
+ * Any existing `[Claude …]` is respected, so the statement path's exact
+ * `[Claude reconcile YYYY-MM]`, which `undo` matches verbatim, is never altered.
+ */
+export function stampMarker(rows: CsvRow[], day: string): CsvRow[] {
+  const marker = `[Claude ${day}]`;
+  return rows.map((r) => {
+    const note = (r.note ?? "").trim();
+    if (/\[Claude\b/.test(note)) return r;
+    return { ...r, note: note ? `${note} ${marker}` : marker };
+  });
 }
 
 /**
