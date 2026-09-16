@@ -44,7 +44,8 @@ import { auditQueue } from "../webhook/queue-audit.js";
 import { formatVerdict } from "../webhook/pending-audit.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
-import { deleteRecords, getRecord } from "../records.js";
+import { deleteRecords, getRecord, listRecordsByDateRange } from "../records.js";
+import { buildMerchantLookup, type MerchantLookup } from "../webhook/merchant-history.js";
 import { sendSafeMessage } from "../bot/telegram-safe.js";
 import { missingStatements } from "../statements/registry.js";
 import { pruneDownloads, pruneStatementInbox } from "../statements/inbox.js";
@@ -263,7 +264,23 @@ async function main() {
   const { check: walletDedup, existingCount } = await buildWalletDedup(couch, from, to);
   console.log(`dedup Wallet: ${existingCount} registro(s) existentes en ventana ±48h.\n`);
 
-  const deps: EmailDeps = { bot, config, couch, userId: credentials.userId, lookup, notificationChatId, walletDedup };
+  // Once per run: two years of Wallet, reduced to what each merchant usually is.
+  // Without it the run proceeds on the model's categories alone.
+  let merchantCategory: MerchantLookup | undefined;
+  try {
+    const since = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString();
+    const categoryNames: Record<string, string> = {};
+    for (const [name, id] of Object.entries(lookup.categories)) categoryNames[id] = name;
+    merchantCategory = buildMerchantLookup(
+      await listRecordsByDateRange(couch, since, new Date().toISOString()),
+      categoryNames
+    );
+  } catch (err) {
+    console.error(`   ⚠ historial de comercios no disponible: ${err instanceof Error ? err.message : err}`);
+  }
+  const deps: EmailDeps = {
+    bot, config, couch, userId: credentials.userId, lookup, notificationChatId, walletDedup, merchantCategory,
+  };
   const ledger = openLedger(from, to);
 
   for (const env of blocked) {
@@ -275,7 +292,10 @@ async function main() {
   const { messages: full } = await fetchWindow(args.folder, from, to, wanted);
   const bodyByUid = new Map(full.map((m) => [m.uid, m] as const));
 
-  const counts = { written: 0, duplicate: 0, no_transaction: 0, pending: 0, clarification: 0, already: 0, merged: 0, failed: 0 };
+  const counts = {
+    written: 0, duplicate: 0, no_transaction: 0, pending: 0, clarification: 0,
+    already: 0, merged: 0, fromHistory: 0, followUp: 0, failed: 0,
+  };
   const succeededUids: number[] = [];
   // Set when a usage limit cuts the run short. Everything not reached stays
   // untouched: no failed marks, no consumed attempts, watermark not advanced.
@@ -300,6 +320,8 @@ async function main() {
       });
       if (result.status === "written") {
         counts.written += result.written;
+        counts.fromHistory += result.fromHistory ?? 0;
+        if (result.followUp) counts.followUp++;
         appendRecords(ledger, (result.writtenIds ?? []).map((id) => ({
           couchId: id, accountId: "", amount: 0, payee: "", category: "",
           txDate: env.date.toISOString(), uid: env.uid,
@@ -442,6 +464,11 @@ async function main() {
     `🚫 Bloqueados (clasificador): ${blocked.length}\n` +
     `▫️ Sin transacción: ${counts.no_transaction}\n` +
     `📋 Nuevas propuestas: ${counts.pending} · 💬 Nuevas aclaraciones: ${counts.clarification}\n` +
+    // Written, but with a question open about the category. They are in the
+    // queue too, and leaving them out made the backlog grow with no new
+    // questions reported.
+    (counts.followUp > 0 ? `🏷️ Escritos con categoría provisional (pregunta abierta): ${counts.followUp}\n` : "") +
+    (counts.fromHistory > 0 ? `📚 Categoría tomada del historial del comercio: ${counts.fromHistory}\n` : "") +
     auditedNote +
     `📮 *Pendientes totales por responder: ${backlog.proposals.length} propuesta(s) · ${backlog.clarifications.length} aclaración(es)*\n` +
     (counts.failed > 0 ? `⚠️ Fallidos (se reintentan): ${counts.failed}\n` : "") +

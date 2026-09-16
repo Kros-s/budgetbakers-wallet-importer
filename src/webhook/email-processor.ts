@@ -5,6 +5,7 @@ import type { Telegraf } from "telegraf";
 
 import { convertRows, parseCsv, stampMarker } from "../csv.js";
 import { localDayStr } from "../batch/ledger.js";
+import { applyMerchantHistory, type MerchantLookup } from "./merchant-history.js";
 import { writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { runClaude } from "../bot/claude-runner.js";
@@ -138,6 +139,11 @@ export interface EmailDeps {
   notificationChatId: number;
   /** Extra duplicate gate against real Wallet records (batch runs). */
   walletDedup?: WalletDedupCheck;
+  /**
+   * The category each merchant has had in Wallet. Built once per batch run;
+   * when absent the model's category stands, exactly as before.
+   */
+  merchantCategory?: MerchantLookup;
 }
 
 export interface ProcessResult {
@@ -153,6 +159,10 @@ export interface ProcessResult {
   costUsd: number | null;
   /** CouchDB ids of the records written (batch ledger / undo support). */
   writtenIds?: string[];
+  /** Rows whose category came from the merchant's history instead of the model. */
+  fromHistory?: number;
+  /** A record was written under a provisional category and a question filed. */
+  followUp?: boolean;
 }
 
 export function buildEmailPrompt(payload: EmailPayload): string {
@@ -317,7 +327,9 @@ export async function processEmail(
   }
 
   // Pulled before the CSV so the block never reaches the parser or the user.
-  const { ask, cleanedText: withoutAsk } = extractAskBlock(effectiveText);
+  const asked = extractAskBlock(effectiveText);
+  let ask = asked.ask;
+  const withoutAsk = asked.cleanedText;
   const { csv, cleanedText } = extractCsvBlock(withoutAsk);
 
   // Claude asked a clarifying question — persist context to disk and notify user
@@ -394,7 +406,24 @@ export async function processEmail(
     return { status: "clarification", written: 0, costUsd: result.costUsd };
   }
 
-  const rows = stampMarker(parseCsv(csv, Object.keys(lookup.categories)), localDayStr());
+  const extracted = stampMarker(parseCsv(csv, Object.keys(lookup.categories)), localDayStr());
+
+  // What the merchant has always been beats what one email suggests. When that
+  // settles a category the model could only mark provisional, the follow-up
+  // question has nothing left to ask and is dropped.
+  const history = deps.merchantCategory
+    ? applyMerchantHistory(extracted, deps.merchantCategory)
+    : { rows: extracted, changes: [] };
+  const rows = history.rows;
+  for (const c of history.changes) {
+    console.log(
+      `[email] categoría por historial: "${c.payee}" ${c.from} → ${c.to} (${c.count} cargos, ${Math.round(c.share * 100)}%)`
+    );
+  }
+  if (ask && !rows.some((r) => r.category === PROVISIONAL_CATEGORY)) {
+    console.log(`[email] el historial resolvió la categoría — no se pregunta: "${ask.slice(0, 80)}"`);
+    ask = null;
+  }
   if (rows.length === 0) throw new Error("Claude returned empty CSV block");
 
   const { records, originalRows, skipped } = convertRows(rows, lookup);
@@ -498,6 +527,8 @@ export async function processEmail(
       written: records.length,
       costUsd: result.costUsd,
       writtenIds: bulk.map((b) => b.id),
+      fromHistory: history.changes.length,
+      followUp: Boolean(ask),
     };
   }
 
