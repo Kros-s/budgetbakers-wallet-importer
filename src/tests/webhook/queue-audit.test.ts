@@ -94,3 +94,33 @@ test("the whole queue costs one read of Wallet, not one per question", async () 
   await auditQueue(couch, lookup, { close: true });
   assert.equal(calls.views, 1);
 });
+
+test("an undated email is judged against when it arrived — the #19 case", async () => {
+  // "Pagaste la deuda total de tu tarjeta" carries no date in the body. On
+  // 16-sep the dateless branch matched its $150 against an OXXO charge from
+  // three weeks later, on another card.
+  storeClarification(3001, {
+    chatId: 7, emailFrom: "notificaciones@mercadopago.com", emailSubject: "Pagaste la deuda total",
+    emailText: "Pagaste la deuda total de tu tarjeta de crédito por $150.00",
+    emailDate: "2026-08-24T18:00:00.000Z",
+    claudeQuestion: "¿Desde cuál cuenta se realizó este pago de $150.00?",
+    createdAt: Date.parse("2026-08-24T20:00:00Z"),
+  });
+  const { couch } = fakeCouch([record(15_000, "2026-09-12", "-Account_costco")]);
+  const audit = await auditQueue(couch, lookup, { close: true });
+  assert.equal(audit.resolved.length, 0);
+  assert.equal(listClarifications().length, 1);
+});
+
+test("the same undated email does close against a match from its own day", async () => {
+  storeClarification(3002, {
+    chatId: 7, emailFrom: "notificaciones@mercadopago.com", emailSubject: "Pagaste la deuda total",
+    emailText: "Pagaste la deuda total de tu tarjeta de crédito por $151.37",
+    emailDate: "2026-08-24T18:00:00.000Z",
+    claudeQuestion: "¿Desde cuál cuenta se realizó este pago de $151.37?",
+    createdAt: Date.parse("2026-08-24T20:00:00Z"),
+  });
+  const { couch } = fakeCouch([record(15_137, "2026-08-24")]);
+  const audit = await auditQueue(couch, lookup, { close: true });
+  assert.equal(audit.resolved.length, 1);
+});

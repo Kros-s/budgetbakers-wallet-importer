@@ -44,6 +44,25 @@ export interface QueueAuditOptions {
   reason?: string;
 }
 
+/**
+ * The date a question's movement is judged against.
+ *
+ * The body's own date when it states one; otherwise when the email arrived,
+ * which every entry carries. Without this fallback, a body with no date sent
+ * `judge` down its dateless branch, where one match of the same amount is
+ * enough — and on 16-sep it matched a $150 payment to the Mercado Pago card
+ * from 24-ago against a $150 OXXO charge on the Costco card three weeks later.
+ * Harmless while /audit needed a human to read the result; not once the batch
+ * closes what it finds every night.
+ */
+export function referenceDate(entry: {
+  emailText: string;
+  emailDate?: string;
+  createdAt: number;
+}): string {
+  return movementDate(entry.emailText) ?? entry.emailDate ?? new Date(entry.createdAt).toISOString();
+}
+
 export async function auditQueue(
   couch: AxiosInstance,
   lookup: LookupMaps,
@@ -70,7 +89,7 @@ export async function auditQueue(
     const verdict = judge({
       shortId: entry.shortId!,
       amountCents: cents,
-      movementDate: movementDate(entry.emailText),
+      movementDate: referenceDate(entry),
       matches,
     });
     if (verdict.resolved) {

@@ -244,7 +244,9 @@ async function confirmAlreadyRecorded(
     const verdict = judge({
       shortId: 0,
       amountCents: cents,
-      movementDate: movementDate(payload.text),
+      // Same fallback as the queue audit: an undated body is judged against
+      // when the email arrived, never against no date at all.
+      movementDate: movementDate(payload.text) ?? payload.date ?? new Date().toISOString(),
       matches,
     });
     if (!verdict.resolved) return null;
