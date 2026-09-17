@@ -89,7 +89,12 @@ export function archiveIfDifferentPeriod(
  * actually extracted, not what the registry believes should exist.
  */
 export function spansFor(account: string): StatementSpan[] {
-  const prefix = `ledger-${ledgerSlug(account)}-`;
+  // The exact canonical name, never a prefix: "banorte" is a prefix of
+  // "banorte-debito", so prefix matching handed the credit card its debit
+  // account's statements and reported five overlaps that do not exist. It also
+  // excludes anything archived or renamed beside it — a ledger kept under its
+  // own period is the same statement, and counting it twice invents an overlap.
+  const canonical = new RegExp(`^ledger-${ledgerSlug(account)}-\\d{4}-\\d{2}\\.json$`);
   let names: string[] = [];
   try {
     names = fs.readdirSync(LEDGER_DIR);
@@ -98,10 +103,7 @@ export function spansFor(account: string): StatementSpan[] {
   }
   const spans: StatementSpan[] = [];
   for (const name of names) {
-    // `--` marks a ledger archived under its own period; it is the same
-    // statement the canonical name once held, and counting both invents an
-    // overlap that is not there.
-    if (!name.startsWith(prefix) || !name.endsWith(".json") || name.includes("--")) continue;
+    if (!canonical.test(name)) continue;
     try {
       const led = JSON.parse(fs.readFileSync(path.join(LEDGER_DIR, name), "utf8")) as StoredLedger;
       if (!led.period) continue;

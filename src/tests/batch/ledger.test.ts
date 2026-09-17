@@ -14,7 +14,7 @@ const {
   openLedger, loadLedger, latestWatermark, markUidProcessed, markUidFailed,
   markClassifiedOut, closeLedger, uidsKnownToLedgers, localDayStr,
 } = await import("../../batch/ledger.js");
-const { archiveIfDifferentPeriod } = await import("../../statements/ledgers.js");
+const { archiveIfDifferentPeriod, spansFor } = await import("../../statements/ledgers.js");
 
 beforeEach(() => {
   fs.rmSync(path.join(scratch, "data"), { recursive: true, force: true });
@@ -124,6 +124,28 @@ test("the same statement re-extracted overwrites its own ledger", () => {
     }));
     assert.equal(archiveIfDifferentPeriod("Meli", "2026-07", { from: "2026-06-22", to: "2026-07-21" }), null);
     assert.equal(fs.existsSync("data/statements/ledger-meli-2026-07.json"), true);
+  } finally {
+    fs.rmSync("data", { recursive: true, force: true });
+  }
+});
+
+test("one account's statements are never another's — banorte vs banorte-debito", () => {
+  // "banorte" is a prefix of "banorte-debito": prefix matching gave the credit
+  // card its debit account's statements and invented five overlaps.
+  try {
+    fs.mkdirSync("data/statements", { recursive: true });
+    const write = (name: string, from: string, to: string) =>
+      fs.writeFileSync(`data/statements/${name}`, JSON.stringify({
+        account: name, month: "2026-07", period: { from, to }, rows: [],
+      }));
+    write("ledger-banorte-2026-07.json", "2026-06-11", "2026-07-10");
+    write("ledger-banorte-debito-2026-07.json", "2026-06-02", "2026-07-01");
+    // Archived beside it, and a hand-made backup: neither is a separate statement.
+    write("ledger-banorte-2026-07--2026-05-11_2026-06-10.json", "2026-05-11", "2026-06-10");
+    write("ledger-banorte-2026-07-respaldo.json", "2026-06-11", "2026-07-10");
+
+    assert.deepEqual(spansFor("Banorte").map((s) => s.period.from), ["2026-06-11"]);
+    assert.deepEqual(spansFor("Banorte débito").map((s) => s.period.from), ["2026-06-02"]);
   } finally {
     fs.rmSync("data", { recursive: true, force: true });
   }
