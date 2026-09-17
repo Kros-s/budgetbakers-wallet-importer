@@ -60,16 +60,33 @@ export function chargesMismatch(rows: CsvRow[], declaredCents: number | null): s
  * Against the declared opening and closing balances it cannot hide: the sum of
  * what was extracted has to equal what the account actually moved.
  */
-export function parseDeclaredNet(text: string): number | null {
+export interface DeclaredBalances {
+  /** Balance the statement declares at the start of its period, in cents. */
+  opening: number | null;
+  /** Balance it declares at the close, in cents. */
+  closing: number | null;
+}
+
+/**
+ * The two balances the statement declares about itself.
+ *
+ * Kept rather than folded straight into a net: one statement's closing balance
+ * is the next one's opening, and that is what shows a month is missing between
+ * them — see `checkContinuity`.
+ */
+export function parseDeclaredBalances(text: string): DeclaredBalances {
   const grab = (label: string): number | null => {
     const m = new RegExp(`${label}:\\s*(-?[\\d.,]+)`).exec(text);
     if (!m) return null;
     const n = Number(m[1].replace(/,/g, ""));
     return Number.isFinite(n) ? Math.round(n * 100) : null;
   };
-  const from = grab("SALDO_INICIAL");
-  const to = grab("SALDO_FINAL");
-  return from === null || to === null ? null : to - from;
+  return { opening: grab("SALDO_INICIAL"), closing: grab("SALDO_FINAL") };
+}
+
+export function parseDeclaredNet(text: string): number | null {
+  const { opening, closing } = parseDeclaredBalances(text);
+  return opening === null || closing === null ? null : closing - opening;
 }
 
 /** Signed sum of every extracted row, in cents. */

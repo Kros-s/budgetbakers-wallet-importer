@@ -14,6 +14,7 @@ import path from "path";
 import type { CsvRow } from "../csv.js";
 import { loadRegistry } from "./registry.js";
 import { accountSlug, ledgerFileName } from "./naming.js";
+import type { StatementSpan } from "./continuity.js";
 
 export const LEDGER_DIR = path.resolve("data/statements");
 
@@ -24,6 +25,9 @@ export interface StoredLedger {
   period: { from: string; to: string } | null;
   chargesDeclared?: number | null;
   netDeclared?: number | null;
+  /** Balances the statement declares, in cents — the chain the next one joins. */
+  openingDeclared?: number | null;
+  closingDeclared?: number | null;
   sourcePdf: string;
   rows: CsvRow[];
 }
@@ -76,6 +80,40 @@ export function archiveIfDifferentPeriod(
   );
   fs.renameSync(ledgerPath(account, month), archived);
   return archived;
+}
+
+/**
+ * Every stored statement of one account, as spans for the continuity check.
+ *
+ * Reads the ledger directory rather than the registry: what matters is what was
+ * actually extracted, not what the registry believes should exist.
+ */
+export function spansFor(account: string): StatementSpan[] {
+  const prefix = `ledger-${ledgerSlug(account)}-`;
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(LEDGER_DIR);
+  } catch {
+    return [];
+  }
+  const spans: StatementSpan[] = [];
+  for (const name of names) {
+    // `--` marks a ledger archived under its own period; it is the same
+    // statement the canonical name once held, and counting both invents an
+    // overlap that is not there.
+    if (!name.startsWith(prefix) || !name.endsWith(".json") || name.includes("--")) continue;
+    try {
+      const led = JSON.parse(fs.readFileSync(path.join(LEDGER_DIR, name), "utf8")) as StoredLedger;
+      if (!led.period) continue;
+      spans.push({
+        month: led.month,
+        period: led.period,
+        opening: led.openingDeclared ?? null,
+        closing: led.closingDeclared ?? null,
+      });
+    } catch { /* a ledger we cannot read is not a gap */ }
+  }
+  return spans;
 }
 
 export interface Coverage {

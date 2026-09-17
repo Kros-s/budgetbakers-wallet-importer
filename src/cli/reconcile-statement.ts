@@ -38,7 +38,7 @@ import {
   DATE_SLACK_DAYS, diff, mayMarkReconciled, unresolvedCount,
 } from "../statements/reconcile-core.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
-import { archiveIfDifferentPeriod, ledgerPath as ledgerPathFor, loadLedger } from "../statements/ledgers.js";
+import { archiveIfDifferentPeriod, ledgerPath as ledgerPathFor, loadLedger, spansFor } from "../statements/ledgers.js";
 import {
   LABEL_AMBIGUOUS, LABEL_MATCHED, LABEL_MISSING, LABEL_PERIOD, LABEL_WALLET_ONLY,
 } from "../statements/reconcile-labels.js";
@@ -46,7 +46,8 @@ import { addMonths, loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
 } from "../statements/period.js";
-import { parseDeclaredCharges, parseDeclaredNet, weighTotals } from "../statements/extraction.js";
+import { parseDeclaredBalances, parseDeclaredCharges, parseDeclaredNet, weighTotals } from "../statements/extraction.js";
+import { checkContinuity } from "../statements/continuity.js";
 import { describeIgnored } from "../statements/installments.js";
 import { describeCash } from "../statements/cash.js";
 import { describeSplice, loadCardDetail, spliceCardDetail } from "../statements/card-detail.js";
@@ -532,9 +533,18 @@ async function main() {
     period: declared,
     chargesDeclared: parseDeclaredCharges(result.text),
     netDeclared: parseDeclaredNet(result.text),
+    openingDeclared: parseDeclaredBalances(result.text).opening,
+    closingDeclared: parseDeclaredBalances(result.text).closing,
     sourcePdf: path.basename(args.pdf), rows,
   }, null, 2));
   console.log(`Ledger del estado: ${ledgerPath}`);
+
+  // Against the statements already stored for this account: a month that never
+  // arrived is invisible to every other check here, because nothing about it is
+  // wrong — it is simply absent.
+  for (const finding of checkContinuity(args.account, spansFor(args.account))) {
+    console.warn(`⚠️ ${finding.message}`);
+  }
 
   await reconcile(args, ctx, rows, declared, totals);
 
