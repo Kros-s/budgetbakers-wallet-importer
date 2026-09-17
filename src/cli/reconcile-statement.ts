@@ -39,6 +39,9 @@ import {
 } from "../statements/reconcile-core.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
 import { ledgerPath as ledgerPathFor, loadLedger } from "../statements/ledgers.js";
+import {
+  LABEL_AMBIGUOUS, LABEL_MATCHED, LABEL_MISSING, LABEL_PERIOD, LABEL_WALLET_ONLY,
+} from "../statements/reconcile-labels.js";
 import { addMonths, loadRegistry } from "../statements/registry.js";
 import {
   calendarPeriod, cutDayMismatch, isNearBoundary, parsePeriodLine, walletWindow,
@@ -243,7 +246,7 @@ async function reconcile(
     );
   }
   const period = declared ?? calendarPeriod(args.month);
-  console.log(`Periodo del estado: ${period.from} → ${period.to}${declared ? "" : " (supuesto)"}`);
+  console.log(`${LABEL_PERIOD} ${period.from} → ${period.to}${declared ? "" : " (supuesto)"}`);
 
   const cutDay = loadRegistry()[args.account]?.cutDay;
   if (declared && cutDay !== undefined) {
@@ -255,13 +258,13 @@ async function reconcile(
   const existing = await listRecordsByDateRange(couch, from, to);
   const d = diff(rows, existing, accountId);
 
-  console.log(`\n✅ Ya en Wallet: ${d.matched}`);
+  console.log(`\n${LABEL_MATCHED} ${d.matched}`);
   // "Faltan en Wallet", not "se agregarían": what is written comes out of this
   // list further down, after held legs, ignored instalments and rows the guard
   // answers are removed. The old label promised a number no run produced.
-  console.log(`➕ Faltan en Wallet: ${d.missing.length}`);
+  console.log(`${LABEL_MISSING} ${d.missing.length}`);
   for (const r of d.missing) console.log(`   ${r.date.slice(0, 10)} $${r.amount} ${r.payee || ""} (${r.category})`);
-  console.log(`⚠️ Ambiguos (revisar a mano): ${d.ambiguous.length}`);
+  console.log(`${LABEL_AMBIGUOUS} ${d.ambiguous.length}`);
   for (const a of d.ambiguous) console.log(`   ${a.row.date.slice(0, 10)} $${a.row.amount} ${a.row.payee || ""} — ${a.reason}`);
   const edge = d.missing.filter((r) => isNearBoundary(r.date.slice(0, 10), period));
   if (edge.length) {
@@ -280,7 +283,7 @@ async function reconcile(
       console.log(`   ${g.record.recordDate.slice(0, 10)} $${net} en Wallet = ${parts}`);
     }
   }
-  console.log(`👀 Solo en Wallet (no aparecen en el estado): ${d.walletOnly.length}`);
+  console.log(`${LABEL_WALLET_ONLY} ${d.walletOnly.length}`);
   for (const w of d.walletOnly) console.log(`   ${w.recordDate.slice(0, 10)} $${(w.amount / 100) * (w.type === 1 ? -1 : 1)} ${w.payee ?? w.note ?? ""}`);
 
   // A purchase in instalments is recorded once, for its full price, in the

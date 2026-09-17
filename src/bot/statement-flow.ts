@@ -13,6 +13,10 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 
+import {
+  LABEL_AMBIGUOUS, LABEL_MATCHED, LABEL_MISSING, LABEL_PERIOD, LABEL_WALLET_ONLY, LEGACY_LABEL_MISSING,
+} from "../statements/reconcile-labels.js";
+
 export interface ReconcileInvocation {
   command: string;
   args: string[];
@@ -49,30 +53,40 @@ export interface ReconcileSummary {
   warnings: string[];
 }
 
-const NUM = (s: string, re: RegExp): number => Number(re.exec(s)?.[1] ?? 0);
+const escape = (label: string): string => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The count printed after a heading, from the current label or the legacy one. */
+function countAfter(out: string, ...labels: string[]): number {
+  for (const label of labels) {
+    const m = new RegExp(`${escape(label)}\\s*(\\d+)`).exec(out);
+    if (m) return Number(m[1]);
+  }
+  return 0;
+}
 
 /** Turns the CLI's stdout into the few numbers worth putting in a message. */
 export function parseReconcileOutput(out: string): ReconcileSummary {
+  const missingHeadings = [LABEL_MISSING, LEGACY_LABEL_MISSING];
   const missingLines: string[] = [];
   let collecting = false;
   for (const line of out.split("\n")) {
-    if (/^➕ Faltantes/.test(line)) { collecting = true; continue; }
+    if (missingHeadings.some((h) => line.startsWith(h))) { collecting = true; continue; }
     if (collecting) {
       if (/^\s{3}\S/.test(line)) { missingLines.push(line.trim()); continue; }
       collecting = false;
     }
   }
   return {
-    period: /Periodo del estado:\s*(\S+ → \S+)/.exec(out)?.[1] ?? null,
-    matched: NUM(out, /✅ Ya en Wallet:\s*(\d+)/),
-    missing: NUM(out, /➕ Faltantes \(se agregarían\):\s*(\d+)/),
-    ambiguous: NUM(out, /⚠️ Ambiguos \(revisar a mano\):\s*(\d+)/),
-    walletOnly: NUM(out, /👀 Solo en Wallet[^:]*:\s*(\d+)/),
+    period: new RegExp(`${escape(LABEL_PERIOD)}\\s*(\\S+ → \\S+)`).exec(out)?.[1] ?? null,
+    matched: countAfter(out, LABEL_MATCHED),
+    missing: countAfter(out, ...missingHeadings),
+    ambiguous: countAfter(out, LABEL_AMBIGUOUS),
+    walletOnly: countAfter(out, LABEL_WALLET_ONLY),
     missingLines,
     // Every ⚠️ the CLI emitted that is not one of its own tally headings.
     warnings: out
       .split("\n")
-      .filter((l) => l.includes("⚠️") && !/Ambiguos \(revisar a mano\)/.test(l))
+      .filter((l) => l.includes("⚠️") && !l.startsWith(LABEL_AMBIGUOUS))
       .map((l) => l.replace(/^\s*⚠️\s*/, "").trim())
       .filter(Boolean),
   };
