@@ -14,6 +14,7 @@ const {
   openLedger, loadLedger, latestWatermark, markUidProcessed, markUidFailed,
   markClassifiedOut, closeLedger, uidsKnownToLedgers, localDayStr,
 } = await import("../../batch/ledger.js");
+const { archiveIfDifferentPeriod } = await import("../../statements/ledgers.js");
 
 beforeEach(() => {
   fs.rmSync(path.join(scratch, "data"), { recursive: true, force: true });
@@ -90,4 +91,40 @@ test("uidsKnownToLedgers unions processed and classified-out across days", () =>
 
 test("localDayStr formats local date", () => {
   assert.match(localDayStr(new Date("2026-08-04T12:00:00")), /^\d{4}-\d{2}-\d{2}$/);
+});
+
+// ── archiveIfDifferentPeriod ────────────────────────────────────────────────
+
+test("a statement covering another period does not erase the stored one", () => {
+  // Banorte débito cut on the 1st through July and at month end from August, so
+  // "2026-07" names both 2-jun→1-jul and 2-jul→31-jul.
+  try {
+    fs.mkdirSync("data/statements", { recursive: true });
+    const file = "data/statements/ledger-banorte-debito-2026-07.json";
+    fs.writeFileSync(file, JSON.stringify({
+      account: "Banorte débito", month: "2026-07",
+      period: { from: "2026-06-02", to: "2026-07-01" }, rows: [{ amount: "1.00" }],
+    }));
+    const moved = archiveIfDifferentPeriod("Banorte débito", "2026-07", { from: "2026-07-02", to: "2026-07-31" });
+    assert.ok(moved, "no archivó el ledger anterior");
+    assert.equal(fs.existsSync(file), false, "dejó el nombre canónico ocupado");
+    assert.match(String(moved), /ledger-banorte-debito-2026-07--2026-06-02_2026-07-01\.json$/);
+    assert.equal(JSON.parse(fs.readFileSync(String(moved), "utf8")).period.from, "2026-06-02");
+  } finally {
+    fs.rmSync("data", { recursive: true, force: true });
+  }
+});
+
+test("the same statement re-extracted overwrites its own ledger", () => {
+  // Re-sending a PDF already processed must stay idempotent, not pile up files.
+  try {
+    fs.mkdirSync("data/statements", { recursive: true });
+    fs.writeFileSync("data/statements/ledger-meli-2026-07.json", JSON.stringify({
+      account: "Meli", month: "2026-07", period: { from: "2026-06-22", to: "2026-07-21" }, rows: [],
+    }));
+    assert.equal(archiveIfDifferentPeriod("Meli", "2026-07", { from: "2026-06-22", to: "2026-07-21" }), null);
+    assert.equal(fs.existsSync("data/statements/ledger-meli-2026-07.json"), true);
+  } finally {
+    fs.rmSync("data", { recursive: true, force: true });
+  }
 });

@@ -46,6 +46,38 @@ export function loadLedger(account: string, month: string): StoredLedger | null 
   }
 }
 
+/**
+ * Moves an existing ledger aside when the incoming statement covers a different
+ * period, and returns where it went.
+ *
+ * A ledger is named by account and month, and the month comes from the cut
+ * date. That held until a bank changed its cycle: Banorte débito cut on the 1st
+ * through July and at month end from August, so the statement for 2–31 July and
+ * the one for 2 June–1 July are both "2026-07". The second would have silently
+ * replaced the first — the extraction that backs everything written for June.
+ *
+ * Keeping the old file under its period is enough: nothing reads the archived
+ * name, and the movements it holds are already in Wallet. Losing it is what
+ * must not happen.
+ */
+export function archiveIfDifferentPeriod(
+  account: string,
+  month: string,
+  period: { from: string; to: string } | null
+): string | null {
+  const current = loadLedger(account, month);
+  if (!current || !period || !current.period) return null;
+  if (current.period.from === period.from && current.period.to === period.to) return null;
+
+  const dir = path.dirname(ledgerPath(account, month));
+  const archived = path.join(
+    dir,
+    `${ledgerFileName(account, month).replace(/\.json$/, "")}--${current.period.from}_${current.period.to}.json`
+  );
+  fs.renameSync(ledgerPath(account, month), archived);
+  return archived;
+}
+
 export interface Coverage {
   month: string;
   have: string[];

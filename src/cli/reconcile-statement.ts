@@ -38,7 +38,7 @@ import {
   DATE_SLACK_DAYS, diff, mayMarkReconciled, unresolvedCount,
 } from "../statements/reconcile-core.js";
 import { commitGuardedWrite, formatGuardReport, guardWrite } from "../statements/guarded-write.js";
-import { ledgerPath as ledgerPathFor, loadLedger } from "../statements/ledgers.js";
+import { archiveIfDifferentPeriod, ledgerPath as ledgerPathFor, loadLedger } from "../statements/ledgers.js";
 import {
   LABEL_AMBIGUOUS, LABEL_MATCHED, LABEL_MISSING, LABEL_PERIOD, LABEL_WALLET_ONLY,
 } from "../statements/reconcile-labels.js";
@@ -517,6 +517,15 @@ async function main() {
   const declared = parsePeriodLine(result.text);
 
   // ── Persist normalized statement ledger ──
+  // A bank that changes its cut date gives two statements the same month label;
+  // the second must not erase the first. See archiveIfDifferentPeriod.
+  const archived = archiveIfDifferentPeriod(args.account, args.month, declared);
+  if (archived) {
+    console.warn(
+      `⚠️ ya había un ledger de ${args.account} ${args.month} con otro periodo — se guardó como ${path.basename(archived)}. ` +
+        `El banco cambió su fecha de corte: revisa que el cruce del mes use el que toca.`
+    );
+  }
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   fs.writeFileSync(ledgerPath, JSON.stringify({
     account: args.account, month: args.month, extractedAt: new Date().toISOString(),
