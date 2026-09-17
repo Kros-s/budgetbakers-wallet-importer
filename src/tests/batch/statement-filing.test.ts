@@ -106,3 +106,15 @@ test("the same unidentified file arriving twice is one thing to look at", async 
   fileStatement({ bytes: bytes("q"), original: "a.pdf", source: "email" });
   assert.equal(unidentifiedArrivals().length, 1);
 });
+
+test("a filed statement is readable by its owner only", () => {
+  // Every movement of a month in the clear; the default mode left each one
+  // world-readable on the container (seen on 2026-09-17).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "filing-mode-"));
+  const { path: full } = fileStatement({
+    bytes: Buffer.from("%PDF-1.4 test"), original: "estado.pdf", source: "telegram",
+    account: "Platinum Credit Card", month: "2026-09", dir,
+  });
+  assert.equal(fs.statSync(full).mode & 0o777, 0o600);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

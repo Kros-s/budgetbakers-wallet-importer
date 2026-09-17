@@ -144,7 +144,9 @@ export function fileStatement(opts: {
   fs.mkdirSync(dir, { recursive: true });
   const { name, duplicate } = resolveCollision(dir, wanted, digest);
   const full = path.join(dir, name);
-  if (!duplicate) fs.writeFileSync(full, opts.bytes);
+  // Owner-only. A statement is every movement of a month in the clear, and the
+  // default mode left each one readable by every account on the container.
+  if (!duplicate) fs.writeFileSync(full, opts.bytes, { mode: 0o600 });
 
   recordArrival({
     at: new Date().toISOString(),

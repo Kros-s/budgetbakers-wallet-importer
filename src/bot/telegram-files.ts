@@ -52,7 +52,8 @@ export async function downloadTelegramFile(
   fs.mkdirSync(opts.downloadDir, { recursive: true });
 
   const response = await axios.get(url, { responseType: "stream" });
-  await pipeline(response.data, fs.createWriteStream(localPath));
+  // Owner-only: what arrives here is receipts, voice notes and statements.
+  await pipeline(response.data, fs.createWriteStream(localPath, { mode: 0o600 }));
 
   const { size } = fs.statSync(localPath);
   return { localPath, mimeType: opts.mimeType ?? null, sizeBytes: size };
