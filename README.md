@@ -10,6 +10,25 @@ All three share the same CouchDB connection, lookup maps, and Claude session inf
 
 ---
 
+## Production deployment
+
+**As of 2026-09-28, production runs on the `iubix` home lab (Proxmox),
+not the Mac LaunchAgent described below.** LXC 200 (`bbw`, `10.40.40.24`)
+runs the bot as a systemd service:
+
+```
+systemctl status bbw-bot.service   # /opt/bbw/dist/bot/index.js, user bbw
+```
+
+The Setup/LaunchAgent instructions further down still work for local dev
+or a from-scratch self-hosted install — they're just not what's live today.
+One thing to verify next time this doc is touched: the container only had
+the Telegram bot listening (no process on `:8765`), so the email-webhook
+half of the pipeline may be running elsewhere or currently inactive —
+confirm before assuming bank emails are still being parsed automatically.
+
+---
+
 ## How it works
 
 ```
