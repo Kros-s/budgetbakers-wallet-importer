@@ -73,3 +73,12 @@ test("transfers and income rows are left exactly as extracted", () => {
   assert.equal(rows[0].category, "Transfer, withdraw");
   assert.equal(rows[1].category, "Refunds (tax, purchase)");
 });
+
+test("a payment processor does not become the merchant's identity", () => {
+  // Konta bills through Conekta. Four spellings of one $174 monthly
+  // subscription keyed three different ways, so the history never reached the
+  // three charges it needs and the charge landed in four categories.
+  assert.equal(merchantKey("CONEKTA*BUHOCONTABLE"), "CONEKTA BUHOCONTABLE");
+  assert.equal(merchantKey("CONEKTA*BUHOCONTABLE MONTERREY"), "CONEKTA BUHOCONTABLE");
+  assert.equal(merchantKey("Conekta BuhoContable"), "CONEKTA BUHOCONTABLE");
+});

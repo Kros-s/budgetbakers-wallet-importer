@@ -55,13 +55,19 @@ const STOP = new Set(["DE", "DEL", "LA", "EL", "LOS", "LAS", "Y", "SA", "CV", "S
  * First tokens shared by unrelated businesses. "EST" is every service station
  * and "MERPAGO" is every merchant paid through Mercado Pago, so for these the
  * next token is what identifies the business.
+ *
+ * CONEKTA is the same kind of prefix and was missing: Konta, billed through it
+ * as "CONEKTA*BUHOCONTABLE", keyed on "CONEKTA" while the bank's other
+ * spellings keyed on "BUHOCONTABLE" and "BUHO". One $174 subscription charged
+ * every 21st ended up under four categories in seven months, because no single
+ * key ever reached the three charges a history needs.
  */
 const GENERIC_FIRST = new Set([
   "EST", "REST", "SUPER", "SUPR", "SUPERCENTER", "FARMACIA", "FARM", "TIENDA", "GAS", "SERV", "SERVICIO",
   "SERVICIOS", "COMERCIAL", "GPO", "GRUPO", "CIA", "THE", "MERPAGO", "MERCADOPAGO", "PAYPAL", "CLIP", "SR",
   "SRA", "OPENPAY", "STRIPE", "BAE", "PRIV", "CAFE", "BAR", "TACOS", "TAQUERIA", "PANADERIA", "HOTEL",
   "ESTACIONAMIENTO", "LAVADO", "AUTOLAVADO", "ABARROTES", "MINI", "MINISUPER", "OPERADORA", "DISTRIBUIDORA",
-  "NETPAY", "ZETTLE", "SUMUP", "POS",
+  "NETPAY", "ZETTLE", "SUMUP", "POS", "CONEKTA",
 ]);
 
 /**

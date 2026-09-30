@@ -178,3 +178,47 @@ test("the $5,000 SPEI is still challenged — its subject reports, it does not s
     false
   );
 });
+
+test("an onboarding mail sells the card it just issued and reports no movement", () => {
+  // Reached the queue as a question on 23-sep: the subject names none of the
+  // sales words, so the filter never looked at it.
+  assert.equal(
+    isPromotion(
+      "Bienvenido a tu nueva The Gold Card American Express",
+      "Gracias por activar tu tarjeta. Conoce los beneficios que te esperan."
+    ),
+    true
+  );
+});
+
+test("marketing does not rescue itself by using a movement verb without a figure", () => {
+  // The same subject filtered correctly over a plain sales body; this one
+  // reached the queue on 24-sep because "recibiste" alone counted as a
+  // movement. What it states is a ceiling on a percentage, not an amount.
+  assert.equal(
+    isPromotion(
+      "El Cashback* Más Grande de este año para el Buen Fin",
+      "Participa y recibiste hasta 20% de bonificación en tus compras."
+    ),
+    true
+  );
+});
+
+test("a ceiling is not a movement even when it is written in pesos", () => {
+  assert.equal(
+    isPromotion("Aprovecha tu cashback", "Recibiste hasta $1,600.00 de bonificación este mes."),
+    true
+  );
+});
+
+test("a welcoming subject over a real credit is still a movement", () => {
+  // The widened subject list must not swallow money: the figure beside the
+  // verb is what keeps this one out of the discard pile.
+  assert.equal(
+    isPromotion(
+      "Bienvenido a tu nueva tarjeta",
+      "Se acreditó $500.00 M.N. a tu cuenta terminación 1002 como bono de bienvenida."
+    ),
+    false
+  );
+});

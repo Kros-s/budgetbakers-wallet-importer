@@ -69,9 +69,15 @@ export function bodyShowsMovement(body: string): boolean {
  * "En Chedraui tus Puntos valen 50% más" from the same sender as its charge
  * alerts. Both carry an amount near a word like "compras", so the challenge
  * below turned two correct discards into questions in one week.
+ *
+ * Onboarding is the same kind of mail under a different opening: "Bienvenido a
+ * tu nueva The Gold Card American Express" sells the card it just issued and
+ * reports no movement, but named none of the words above and reached the queue
+ * as a question on 23-sep. Welcoming is safe to list here because a mail that
+ * does move money states the amount, and the rescue below reads it.
  */
 const PROMOTIONAL_SUBJECT =
-  /\b(?:cashback|puntos|promoci[oó]n(?:es)?|ofertas?|descuentos?|beneficios?|meses sin intereses|msi|sorteos?|participa|gana|celebra[rn]?|exclusiv[oa]s?|invitaci[oó]n|aprovecha|te regalamos|recompensas?)\b|\bhasta \$/i;
+  /\b(?:cashback|puntos|promoci[oó]n(?:es)?|ofertas?|descuentos?|beneficios?|meses sin intereses|msi|sorteos?|participa|gana|celebra[rn]?|exclusiv[oa]s?|invitaci[oó]n|aprovecha|te regalamos|recompensas?|bienvenid[oa]s?|felicidades|conoce|descubre)\b|\bhasta \$/i;
 
 /**
  * Wording that reports a movement that already happened to this customer.
@@ -84,9 +90,40 @@ const PROMOTIONAL_SUBJECT =
 const COMPLETED_MOVEMENT =
   /\b(?:recibiste|enviaste|pagaste|compraste|retiraste|depositamos|te depositaron|se (?:realiz[oó]|aplic[oó]|acredit[oó]|carg[oó]|abon[oó]|efectu[oó])|(?:fue|ha sido) (?:aplicad|acreditad|realizad|cargad|abonad)[oa]|tu (?:pago|compra|transferencia|dep[oó]sito|retiro) (?:de|por)\s)/i;
 
-/** True when an email is selling rather than reporting. */
+/**
+ * How far past the verb an amount is still that verb's amount.
+ *
+ * "Se acreditó $120.00 de cashback" puts them next to each other; the span is
+ * generous enough for a terminación or a currency code in between.
+ */
+const AMOUNT_WINDOW = 60;
+
+/**
+ * Whether the text right after `from` states an amount as a fact.
+ *
+ * A ceiling is not a movement: marketing writes "hasta $1,600" over money it
+ * has not moved, so an amount introduced by "hasta" does not count.
+ */
+function statesAmountAfter(text: string, from: number): boolean {
+  const window = text.slice(from, from + AMOUNT_WINDOW);
+  return /\$\s?\d/.test(window) && !/\bhasta\s+\$/i.test(window);
+}
+
+/**
+ * True when an email is selling rather than reporting.
+ *
+ * The rescue above cannot be the verb alone. Marketing copy uses the same
+ * verbs it does — "Participa y recibiste hasta 20% de bonificación" rescued
+ * itself, and "El Cashback* Más Grande de este año" reached the queue on
+ * 24-sep over a body that moved nothing. What separates the two is not the
+ * verb but the figure beside it: a mail that really moved money says how much.
+ */
 export function isPromotion(subject: string, body: string): boolean {
-  return PROMOTIONAL_SUBJECT.test(subject) && !COMPLETED_MOVEMENT.test(body.replace(/\s+/g, " "));
+  if (!PROMOTIONAL_SUBJECT.test(subject)) return false;
+  const flat = body.replace(/\s+/g, " ");
+  const movement = COMPLETED_MOVEMENT.exec(flat);
+  if (!movement) return true;
+  return !statesAmountAfter(flat, movement.index);
 }
 
 export interface Challenge {
