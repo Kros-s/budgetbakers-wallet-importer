@@ -159,6 +159,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
   const start = Date.now();
   const child = spawn(config.claudeBin, args, {
     cwd: config.claudeCwd,
+    detached: process.platform !== "win32",
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -174,7 +175,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
 
   const timeoutMs = opts.timeoutMs ?? 180_000;
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
+  const timer = setTimeout(() => { timedOut = true; try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); } catch {} }, timeoutMs);
 
   const code: number | null = await new Promise((resolve, reject) => {
     child.on("error", (err) => { clearTimeout(timer); reject(err); });

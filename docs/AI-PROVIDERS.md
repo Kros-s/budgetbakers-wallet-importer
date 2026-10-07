@@ -75,3 +75,32 @@ Para volver al código anterior: detener `bbw-bot`, restaurar el archivo privado
 `bbw-bot`. El respaldo no reemplaza `data` ni secretos. Los archivos nuevos de
 IA quedan inactivos con el código anterior. No ejecutar provision-lxc.sh sobre
 producción para esta actualización.
+
+## Registro de despliegue — 2026-10-07
+
+Rama `codex/ai-provider-fallback`. Implementación inicial `a766da7`, seguida
+por registro de uso de tokens y cierre del despliegue. Se desplegó con el
+script soportado por Proxmox, compilando en LXC 200. Bot activo y `/ai`
+confirmado en el menú real de Telegram mediante `getMyCommands`.
+Modo persistente inicial: **codex**, por la suscripción de Claude desactivada.
+
+Validación: 591 pruebas locales pasan, compilación local y remota exitosas.
+En el LXC, login ChatGPT confirmado como `bbw`; Luna devolvió MODEL_OK y
+extrajo correctamente dos ejemplos sintéticos (marketing y compra de
+$150.50). Sol respondió y pasó una extracción de texto de PDF sintético
+mediante `pdftotext`. No se escribió ningún movimiento ni se enviaron
+mensajes de prueba a usuarios. Los tokens de Codex ahora quedan en el log
+`[ai]`, sin prompts ni credenciales. La prueba mínima de PDF reportó 5,817
+tokens de entrada y 7 de salida: el CLI tiene overhead incluso con
+instrucciones reducidas; no se promete consumo equivalente a una API directa.
+
+**Bloqueo independiente:** iCloud devuelve `AUTHENTICATIONFAILED` al
+conectar por IMAP. La corrida del 6 de octubre falló antes de invocar IA.
+El usuario confirmó un cambio de cuenta y actualizará `ICLOUD_EMAIL` y
+`ICLOUD_APP_PASSWORD` en `/opt/bbw/.env.local`. No se modificaron esos
+secretos. Falta validar IMAP y una corrida de extracción real después de
+esa actualización; no se afirma que el procesamiento diario ya esté sano.
+Los timers siguen habilitados con sus horarios existentes.
+
+La revisión exacta del código desplegado se registra en
+`/opt/bbw/data/deployments/ai-20261007.json`; no contiene secretos.
