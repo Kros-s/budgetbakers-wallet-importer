@@ -1,55 +1,66 @@
-# Migración a Proxmox — despliegue NATIVO (elegido 2026-08-05)
+# Proxmox migration — native deployment (chosen 2026-08-05)
 
-Decisión del usuario: **sin Docker**. Node 22 + Claude Code CLI directo en un
-LXC, con systemd timers. Se porta TODO: batch nocturno (20:00), recordatorio
-(10:30) y bot interactivo de Telegram. (El Dockerfile/compose del repo queda
-como alternativa, no es la ruta activa.)
+The user's decision was **no Docker**. Production runs Node 22, Claude Code
+and Codex CLI directly in LXC 200, managed by systemd. This includes the
+20:00 daily batch, the 10:30 reminder, and the interactive Telegram bot.
+The Dockerfile and Compose configuration remain alternatives, not the active
+deployment path. Times are America/Mexico_City.
 
-## Piezas (en `scripts/deploy/`)
+## Components in `scripts/deploy/`
 
-- `push.sh` — corre en el Mac: sincroniza el árbol, compila y reinicia el bot.
-  Es la única forma soportada de desplegar; los `--exclude` viven ahí.
-- `provision-lxc.sh` — corre EN el LXC: timezone, Node 22, pnpm, Claude CLI,
-  build, usuario de servicio `bbw`, instala y habilita las unidades.
-- `systemd/bbw-daily.{service,timer}` — batch one-shot a las 20:00,
-  `Persistent=true` (si el LXC estuvo apagado, dispara al arrancar y la
-  ventana watermark cubre el hueco).
-- `systemd/bbw-remind.{service,timer}` — recordatorio 10:30, no persistente.
-- `systemd/bbw-bot.service` — bot interactivo, `Restart=on-failure` (es el
-  único proceso de larga vida; nunca escribe sin confirmación).
+- `push.sh`: runs locally, synchronizes source, builds remotely, and restarts
+  the bot. This is the supported deployment path; exclusions live here.
+  Use `scripts/deploy/push.sh --proxmox` for SSH through the Proxmox host and
+  `pct exec 200`, or supply a directly accessible LXC SSH host.
+- `provision-lxc.sh`: runs inside a new LXC; installs timezone configuration,
+  Node 22, pnpm, both CLIs, poppler-utils, the `bbw` service user, and units.
+  Do not rerun it on production for ordinary code updates.
+- `systemd/bbw-daily.{service,timer}`: one-shot daily batch at 20:00 with
+  `Persistent=true`. A missed timer runs after boot; the watermark covers
+  the processing gap.
+- `systemd/bbw-remind.{service,timer}`: 10:30 reminder, not persistent.
+- `systemd/bbw-bot.service`: interactive bot with `Restart=on-failure`;
+  interactive proposals require confirmation before writes.
 
-## Requisitos del LXC
+## LXC requirements
 
-- Debian 12 / Ubuntu 22.04+, acceso a internet, ~2 GB RAM.
-- NO necesita nesting (sin Docker).
+- Debian 12 / Ubuntu 22.04 or newer, internet access, approximately 2 GB RAM.
+- No nesting required: this deployment does not use Docker.
 
-## Pasos
+## Initial deployment
 
-1. **Acceso**: agregar la llave pública del Mac (`~/.ssh/id_ed25519.pub`) a
-   `root@<lxc>:/root/.ssh/authorized_keys` (las llaves actuales del usuario
-   viven en otra máquina).
-2. **Token del CLI** (una vez, en el Mac): `claude setup-token` →
-   en el LXC crear `/etc/bbw.env` con `CLAUDE_CODE_OAUTH_TOKEN=...` (600).
-3. **Copiar**: `scripts/deploy/push.sh` — NO a mano. La lista de `--exclude`
-   se desincronizó estando en prosa y cada despliegue mandaba `Statements/`
-   (12 MB de PDFs bancarios) al contenedor. `data/` y `.env.local` se copian
-   aparte, una sola vez (600).
-4. **Provisionar**: `ssh root@lxc bash /opt/bbw/scripts/deploy/provision-lxc.sh`
-5. **Paridad**: `sudo -u bbw node /opt/bbw/dist/cli/process-window.js --dry-run`
-   debe proponer lo mismo que el Mac.
-6. **Cutover**: verificar `systemctl list-timers 'bbw-*'`; arrancar el bot
-   (`systemctl start bbw-bot`); en el Mac NO recargar ningún LaunchAgent
-   (los viejos ya están `.disabled`; `com.bbw-daily` nunca se activó).
-   Detener también el bot interactivo temporal del Mac.
-7. Supervisar la primera corrida de las 20:00 (resumen en Telegram).
-8. Después de 2–3 noches estables: borrar los plists `.disabled` del Mac.
+1. Establish SSH access through Proxmox, or add the local public SSH key to
+   the LXC root user's `authorized_keys` for direct access.
+2. Configure the selected provider privately. Claude uses
+   `CLAUDE_CODE_OAUTH_TOKEN` in `/etc/bbw.env` (0600), obtained through
+   `claude setup-token`. Codex authenticates as `bbw` with HOME
+   `/var/lib/bbw`; see [AI providers](AI-PROVIDERS.md).
+3. Copy code using `scripts/deploy/push.sh`; do not maintain a separate manual
+   exclusion list. Earlier manual deployments accidentally copied 12 MB of
+   bank PDFs. `data/` and `.env.local` are transferred separately only for
+   initial setup; credentials have permissions 0600.
+4. Provision the new LXC with `/opt/bbw/scripts/deploy/provision-lxc.sh`.
+5. Check parity with `process-window.js --dry-run` under user `bbw`, HOME
+   `/var/lib/bbw`, working directory `/opt/bbw`, and the production timezone.
+6. Verify `systemctl list-timers 'bbw-*'` and start `bbw-bot`. Do not reload
+   obsolete local LaunchAgents; stop any temporary local interactive bot to
+   prevent competing Telegram polling processes.
+7. Observe the first 20:00 run and its Telegram summary.
+8. After two or three stable nights, remove obsolete disabled local plists.
 
-## Notas
+## Updating production
 
-- Voz (whisper) en el bot: no se instala por defecto; si se usa audio en
-  Telegram, instalar whisper en el LXC (`pipx install openai-whisper`) y
-  definir `WHISPER_BIN` en `.env.local`, o ignorar audios.
-- Estado completo en `/opt/bbw/data` — rollback = rsync inverso al Mac.
-- El "watcher" que revivía el LaunchAgent viejo en el Mac sigue sin
-  localizarse: al migrar, verificar que nada en el Mac levante el bot de
-  nuevo (`pgrep -fl main.ts`).
+Implement and test in the local repository, commit/push, then deploy with
+`scripts/deploy/push.sh --proxmox`. Live credentials and runtime data remain
+in the LXC. Provider selection through `/ai` persists and is shared by the
+bot and daily batch. Keep deployment evidence and rollback instructions in
+[AI providers](AI-PROVIDERS.md).
+
+## Notes
+
+- Voice transcription is not installed by default. If required, install
+  `openai-whisper` with pipx and set `WHISPER_BIN` in `.env.local`.
+- Runtime state lives under `/opt/bbw/data`. Recovering it to the Mac requires
+  a deliberate reverse synchronization, separate from code deployment.
+- The old local LaunchAgent watcher has not been located. Before enabling a
+  new deployment, check that no local process restarts the old bot.

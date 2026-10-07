@@ -26,6 +26,8 @@ import { Telegraf } from "telegraf";
 
 import { loadEnvLocal } from "../env.js";
 import { buildImapClient } from "../imap/client.js";
+import { imapSearchWindow, inProcessingWindow } from "../imap/window.js";
+import { getAiMode, aiModels } from "../bot/ai-policy.js";
 import { bodyToText } from "../imap/poller.js";
 import { getProcessed, saveProcessed } from "../imap/processed-store.js";
 import { classifyEmail } from "../classifier/email-rules.js";
@@ -123,7 +125,7 @@ async function fetchWindow(folder: string, from: Date, to: Date, wantBodies: Set
     const lock = await client.getMailboxLock(folder);
     try {
       if (client.mailbox) uidValidity = (client.mailbox as { uidValidity: bigint }).uidValidity;
-      const uids = await client.search({ since: from, before: to }, { uid: true });
+      const uids = await client.search(imapSearchWindow(from, to), { uid: true });
       if (!uids || uids.length === 0) return { messages, uidValidity };
       const toFetch = wantBodies ? uids.filter((u) => wantBodies.has(u)) : uids;
       if (toFetch.length === 0) return { messages, uidValidity };
@@ -133,11 +135,13 @@ async function fetchWindow(folder: string, from: Date, to: Date, wantBodies: Set
       for await (const msg of client.fetch(toFetch, fetchOpts, { uid: true })) {
         if (!msg.envelope) continue;
         const raw = msg.internalDate ?? msg.envelope.date ?? new Date(0);
+        const receivedAt = raw instanceof Date ? raw : new Date(raw);
+        if (!inProcessingWindow(receivedAt, from, to)) continue;
         messages.push({
           uid: msg.uid,
           from: msg.envelope.from?.[0]?.address ?? "?",
           subject: msg.envelope.subject ?? "",
-          date: raw instanceof Date ? raw : new Date(raw),
+          date: receivedAt,
           source: msg.source,
         });
       }
@@ -213,7 +217,7 @@ async function main() {
   loadEnvLocal();
   const { from, to } = resolveWindow(args);
   console.log(`\n── process-window ${args.dryRun ? "(DRY-RUN) " : ""}──`);
-  console.log(`   ventana: ${from.toISOString()} → ${to.toISOString()} · folder=${args.folder} · model=${EMAIL_MODEL}\n`);
+  console.log(`   ventana: ${from.toISOString()} → ${to.toISOString()} · folder=${args.folder} · mode=${getAiMode()} · claude=${EMAIL_MODEL} · codex=${aiModels().email}\n`);
 
   // ── Phase 1: envelopes only, classify, decide what needs bodies ──
   const { messages: envelopes, uidValidity } = await fetchWindow(args.folder, from, to, null);
@@ -244,7 +248,7 @@ async function main() {
   console.log(`ya procesados: ${skipped.length} · bloqueados por clasificador: ${blocked.length} · a procesar: ${toProcess.length}\n`);
 
   if (blocked.length + toProcess.length === 0) {
-    console.log("Ventana ya procesada — nada que hacer.");
+    console.log(envelopes.length ? "Ventana ya procesada — nada que hacer." : "Ventana sin correos — nada que hacer.");
     return;
   }
 
