@@ -2,11 +2,11 @@
 
 Automated transaction pipeline for BudgetBakers / Wallet. Combines three things in a single always-on process:
 
-1. **Telegram bot** — chat with Claude to record transactions, confirm proposals, rollback mistakes.
-2. **Email webhook** — bank notification emails are parsed by Claude and written automatically, or routed to Telegram for confirmation.
+1. **Telegram bot** — chat with the selected AI provider to record transactions, confirm proposals, rollback mistakes.
+2. **Email webhook** — bank notification emails are parsed by the selected AI provider and written automatically, or routed to Telegram for confirmation.
 3. **CSV importer CLI** — batch-import from a CSV file (the original tool, still works).
 
-All three share the same CouchDB connection, lookup maps, and Claude session infrastructure.
+All three share the same CouchDB connection and lookup maps. AI extraction uses the common Claude/Codex provider runner.
 
 ---
 
@@ -34,10 +34,10 @@ systemctl status bbw-bot.service   # /opt/bbw/dist/bot/index.js, user bbw
 
 The Setup/LaunchAgent instructions further down still work for local dev
 or a from-scratch self-hosted install — they're just not what's live today.
-One thing to verify next time this doc is touched: the container only had
-the Telegram bot listening (no process on `:8765`), so the email-webhook
-half of the pipeline may be running elsewhere or currently inactive —
-confirm before assuming bank emails are still being parsed automatically.
+The active email path is the daily systemd batch reading iCloud IMAP at
+20:00 CDMX, independently of the webhook. The webhook listener on `:8765`
+is not active in this deployment. Provider changes and the October 7
+authentication recovery are recorded in `docs/AI-PROVIDERS.md`.
 
 ---
 
@@ -63,7 +63,8 @@ Every day at 21:00 → Telegram daily summary of all recorded transactions
 ## Requirements
 
 - Node.js 18+
-- [Claude Code CLI](https://claude.ai/code) authenticated with a Claude Max account (`claude` binary in PATH)
+- Claude Code CLI and/or Codex CLI, authenticated for the selected provider (`claude` / `codex` in PATH). Production currently uses Codex with ChatGPT authentication.
+- `poppler-utils` for Codex PDF text extraction; scanned PDFs need OCR first.
 - A BudgetBakers / Wallet account with CouchDB credentials
 - A Telegram bot token (from BotFather)
 - Cloudflare account (for the email worker + tunnel)
