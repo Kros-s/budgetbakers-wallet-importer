@@ -230,3 +230,24 @@ sudo -u bbw env HOME=/var/lib/bbw TZ=America/Mexico_City \
 
 This means September 30 20:00 through October 1 20:00 CDMX, not the calendar
 day at midnight. It permits normal Wallet writes and Telegram questions.
+
+Official run completed successfully with Codex Luna: INBOX 0 emails, Archive
+33 emails, 5 classified out, 27 no-transaction results, one clarification,
+zero written Wallet records, and zero failures. Telegram clarification
+#1845 asks which account paid the Sam's Club purchase of MXN 1,630.
+Existing backlog warnings concern earlier runs. Shared coverage now ends
+at `2026-10-02T02:00:00Z` (October 1 20:00 CDMX). Repeating the same official
+window skipped all 33 messages with zero AI calls and no additional question.
+28 message fingerprints are persisted; both October 1 ledgers are complete.
+
+Official inference usage: 28 calls, 290,802 input tokens (211,200 cached),
+181 output tokens. The repeat used no inference tokens. The first recovery
+still evaluates unfiltered notices/newsletters; subsequent overlap scans
+skip known UIDs and message fingerprints before model invocation.
+
+Private run evidence:
+`/opt/bbw/change-backups/ai-20261007/official-2026-10-01.log` and
+`official-2026-10-01-repeat.log`. Pre-run backup:
+`/opt/bbw/data/backups-full/bbw-state-2026-10-07-1314.tar.gz`.
+The normal end-of-run retention sweep removed 7 expired ledgers and 6 old
+cached attachments. No timer schedule or stack placement was changed.
