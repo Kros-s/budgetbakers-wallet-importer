@@ -18,6 +18,8 @@
  *  - proposals are dedup-checked against real Wallet records (±48 h).
  */
 import fs from "fs";
+import { runMailboxes } from "../batch/mailboxes.js";
+import { messageFingerprint, MessageIdentities, acquireBatchLock } from "../imap/message-identities.js";
 import path from "path";
 import readline from "readline";
 import { v4 as uuidv4 } from "uuid";
@@ -64,6 +66,7 @@ interface Args {
   from?: string;
   to?: string;
   day?: string;
+  ledgerDay?: string;
   dryRun: boolean;
   force: boolean;
   undoRun?: string;
@@ -81,6 +84,7 @@ function parseArgs(argv: string[]): Args {
     from: get("--from"),
     to: get("--to"),
     day: get("--day"),
+    ledgerDay: get("--ledger-day"),
     dryRun: argv.includes("--dry-run"),
     force: argv.includes("--force"),
     undoRun: get("--undo-run"),
@@ -217,6 +221,12 @@ async function main() {
   }
 
   loadEnvLocal();
+  if (!process.argv.includes("--folder")) {
+    await runMailboxes(process.argv.slice(2));
+    return;
+  }
+  acquireBatchLock();
+  const identities = new MessageIdentities();
   const { from, to } = resolveWindow(args);
   console.log(`\n── process-window ${args.dryRun ? "(DRY-RUN) " : ""}──`);
   console.log(`   ventana: ${from.toISOString()} → ${to.toISOString()} · folder=${args.folder} · mode=${getAiMode()} · claude=${EMAIL_MODEL} · codex=${aiModels().email}\n`);
@@ -252,6 +262,7 @@ async function main() {
 
   if (blocked.length + toProcess.length === 0) {
     console.log(envelopes.length ? "Ventana ya procesada — nada que hacer." : "Ventana sin correos — nada que hacer.");
+    if (!args.dryRun) closeLedger(openLedger(from, to, args.day ?? args.ledgerDay, args.folder, uidValidity), "complete");
     return;
   }
 
@@ -288,7 +299,7 @@ async function main() {
   const deps: EmailDeps = {
     bot, config, couch, userId: credentials.userId, lookup, notificationChatId, walletDedup, merchantCategory,
   };
-  const ledger = openLedger(from, to, undefined, args.folder, uidValidity);
+  const ledger = openLedger(from, to, args.day ?? args.ledgerDay, args.folder, uidValidity);
 
   for (const env of blocked) {
     markClassifiedOut(ledger, { uid: env.uid, from: env.from, subject: env.subject });
@@ -314,8 +325,17 @@ async function main() {
     console.log(`[${i + 1}/${toProcess.length}] uid=${env.uid} ${env.from} — "${env.subject.slice(0, 70)}"`);
     try {
       if (!msg?.source) throw new Error("no se pudo descargar el cuerpo");
+      const fingerprint = messageFingerprint(msg.source);
+      if (identities.has(fingerprint)) {
+        markUidProcessed(ledger, env.uid);
+        succeededUids.push(env.uid);
+        counts.duplicate++;
+        console.log("   ↪ mensaje ya procesado en otra carpeta (sin llamada AI)");
+        continue;
+      }
       const text = await extractBody(msg.source);
       if (!text) {
+        identities.add(fingerprint);
         markUidProcessed(ledger, env.uid);
         succeededUids.push(env.uid);
         counts.no_transaction++;
@@ -339,6 +359,7 @@ async function main() {
       else if (result.status === "clarification") counts.clarification++;
       else if (result.status === "already_recorded") counts.already++;
       else if (result.status === "merged_question") counts.merged++;
+      identities.add(fingerprint);
       markUidProcessed(ledger, env.uid);
       succeededUids.push(env.uid);
     } catch (err) {
@@ -462,7 +483,7 @@ async function main() {
       `Los ${paused.total - paused.done} restantes NO se marcaron como fallidos y se retoman en la siguiente ventana.\n`
     : "";
   const summary =
-    `📦 *Batch ${localDayStr()}*${pausedNote}\n` +
+    `📦 *Batch ${args.day ?? args.ledgerDay ?? localDayStr()} · ${args.folder}*${pausedNote}\n` +
     `Ventana: ${from.toISOString().slice(0, 16)} → ${to.toISOString().slice(0, 16)}\n` +
     `✅ Escritos: ${counts.written}\n` +
     `🔁 Duplicados evitados: ${counts.duplicate}\n` +
@@ -490,7 +511,7 @@ async function main() {
   } catch (err) {
     console.error("No se pudo enviar el resumen a Telegram:", err instanceof Error ? err.message : err);
   }
-  process.exit(counts.failed > 0 ? 1 : 0);
+  process.exit(counts.failed > 0 || paused ? 1 : 0);
 }
 
 interface StoredClarification {
@@ -565,6 +586,7 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
 
   for (const b of blocked) console.log(`🚫 uid=${b.uid} ${b.from} — "${b.subject.slice(0, 60)}" (clasificador)`);
 
+  const identities = new MessageIdentities();
   const wanted = new Set(toProcess.map((m) => m.uid));
   const { messages: full } = await fetchWindow(folder, from, to, wanted);
   const bodyByUid = new Map(full.map((m) => [m.uid, m] as const));
@@ -575,6 +597,8 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
     process.stdout.write(`[${i + 1}/${toProcess.length}] uid=${env.uid} ${env.from} — "${env.subject.slice(0, 60)}" → `);
     try {
       if (!msg?.source) throw new Error("sin cuerpo");
+      const fingerprint = messageFingerprint(msg.source);
+      if (identities.has(fingerprint)) { console.log("already processed message (no AI)"); continue; }
       const text = await extractBody(msg.source);
       if (!text) {
         console.log("(cuerpo vacío)");

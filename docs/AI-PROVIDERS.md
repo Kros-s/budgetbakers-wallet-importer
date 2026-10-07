@@ -186,3 +186,47 @@ the exception for a completed credit with an actual amount. Two regression
 tests cover both cases. Dry-run also reports `challengedVerdicts`, so model
 verdicts and the production safeguard can be assessed separately. The saved
 model responses were rechecked without additional AI calls.
+
+## Automatic mailbox coverage (2026-10-07)
+
+`process-window.js` without `--folder` discovers INBOX and every mailbox
+marked `\\Archive` by IMAP special-use. It fails instead of silently
+skipping a missing Archive. Sent, Junk, and Trash are excluded. Explicit
+`--folder` remains available for diagnostics, but does not advance shared
+coverage. The existing daily systemd command uses this automatic mode.
+
+The shared checkpoint is `data/imap/mailbox-coverage.json`, advanced only
+after every selected mailbox finishes successfully. Its initial starting
+point is saved before processing either mailbox, so an Archive failure
+cannot inherit an advanced INBOX watermark. Empty windows are recorded as
+complete. Quota pauses return a failure exit code and preserve coverage.
+Daily runs revisit seven days, bounded by the initial recovery date. A move
+of an older, never-processed email needs an explicit historical recovery;
+the automatic overlap is not an unlimited historical scan.
+
+Successful messages have an account-scoped SHA-256 fingerprint of the full
+RFC822 source, with transport line endings normalized. Folder and IMAP UID
+are excluded, so moving the same message preserves its identity. Different
+content with a reused Message-ID remains distinct. Identity files live in
+`data/imap/message-identities-*.json`; corrupt files fail closed. Fingerprints
+start accumulating with this deployment: old UID history cannot identify
+a previously moved message retrospectively. Wallet transaction comparison
+remains the financial duplicate guard, including after a crash between a
+Wallet write and saving the fingerprint. A Wallet record UUID alone does
+not recognize a newly imported duplicate. A server rewriting message
+content can change the fingerprint; Wallet comparison remains necessary.
+
+Automatic and explicit-folder batches share an exclusive PID lock. A
+mailbox move between header discovery and body retrieval fails that email
+and leaves coverage unchanged so the next run retries.
+
+Official first missing scheduled window:
+
+```sh
+cd /opt/bbw
+sudo -u bbw env HOME=/var/lib/bbw TZ=America/Mexico_City \
+  node dist/cli/process-window.js --day 2026-10-01
+```
+
+This means September 30 20:00 through October 1 20:00 CDMX, not the calendar
+day at midnight. It permits normal Wallet writes and Telegram questions.

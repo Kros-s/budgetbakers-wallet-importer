@@ -64,3 +64,7 @@ bot and daily batch. Keep deployment evidence and rollback instructions in
   a deliberate reverse synchronization, separate from code deployment.
 - The old local LaunchAgent watcher has not been located. Before enabling a
   new deployment, check that no local process restarts the old bot.
+
+The existing daily command now discovers INBOX and IMAP Archive automatically.
+See [mailbox coverage and deduplication](AI-PROVIDERS.md#automatic-mailbox-coverage-2026-10-07)
+for the shared checkpoint, seven-day overlap, and historical recovery command.
