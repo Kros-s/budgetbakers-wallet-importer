@@ -77,7 +77,7 @@ export function bodyShowsMovement(body: string): boolean {
  * does move money states the amount, and the rescue below reads it.
  */
 const PROMOTIONAL_SUBJECT =
-  /\b(?:cashback|puntos|promoci[oó]n(?:es)?|ofertas?|descuentos?|beneficios?|meses sin intereses|msi|sorteos?|participa|gana|celebra[rn]?|exclusiv[oa]s?|invitaci[oó]n|aprovecha|te regalamos|recompensas?|bienvenid[oa]s?|felicidades|conoce|descubre)\b|\bhasta \$/i;
+  /\b(?:cashback|puntos|promoci[oó]n(?:es)?|ofertas?|descuentos?|beneficios?|meses sin intereses|msi|sorteos?|participa|gana|celebra[rn]?|exclusiv[oa]s?|invitaci[oó]n|aprovecha|te regalamos|recompensas?|bienvenid[oa]s?|felicidades|conoce|descubre)\b|\bhasta \$|\bpensando en viajar\b/i;
 
 /**
  * Wording that reports a movement that already happened to this customer.

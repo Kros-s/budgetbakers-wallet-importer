@@ -222,3 +222,13 @@ test("a welcoming subject over a real credit is still a movement", () => {
     false
   );
 });
+
+test("Amex travel points promotion does not become a false transaction clarification", () => {
+ const subject="¿pensando en viajar?";
+ const body="Tus Puntos valen el DOBLE. Por ejemplo, 15,000 Puntos equivalen a $3,000.00 M.N. para reservar vuelos. Recibirás una acreditación por el valor promocional.";
+ assert.equal(isPromotion(subject,body),true);
+ assert.equal(challengeNoTransaction({from:"americanexpress.com",subject,body,reason:""}),null);
+});
+test("travel promotion wording cannot hide a completed credit", () => {
+ assert.equal(isPromotion("¿pensando en viajar?", "Se acreditó $120.00 a tu tarjeta."),false);
+});

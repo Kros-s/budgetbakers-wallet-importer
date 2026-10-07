@@ -26,7 +26,7 @@ import { Telegraf } from "telegraf";
 
 import { loadEnvLocal } from "../env.js";
 import { convertRows, parseCsv } from "../csv.js";
-import { parseVerdict } from "../webhook/verdict.js";
+import { parseVerdict, challengeNoTransaction } from "../webhook/verdict.js";
 import { buildImapClient } from "../imap/client.js";
 import { imapSearchWindow, inProcessingWindow } from "../imap/window.js";
 import { getAiMode, aiModels } from "../bot/ai-policy.js";
@@ -561,7 +561,7 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
   const { check: walletDedup, existingCount } = await buildWalletDedup(couch, from, to);
   console.log(`dedup Wallet: ${existingCount} registro(s) existentes en ventana ±48h.\n`);
   const lookup = buildLookupMapsFromData(await fetchLookupData(couch));
-  const summary = { candidates: toProcess.length, blocked: blocked.length, completed: 0, noTransaction: 0, clarifications: 0, proposedRows: 0, duplicateRows: 0, invalidRows: 0, errors: 0, paused: false };
+  const summary = { candidates: toProcess.length, blocked: blocked.length, completed: 0, noTransaction: 0, clarifications: 0, challengedVerdicts: 0, proposedRows: 0, duplicateRows: 0, invalidRows: 0, errors: 0, paused: false };
 
   for (const b of blocked) console.log(`🚫 uid=${b.uid} ${b.from} — "${b.subject.slice(0, 60)}" (clasificador)`);
 
@@ -593,7 +593,12 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
       });
       const line = result.text.trim();
       summary.completed++;
-      if (parseVerdict(line).isNoTransaction) { summary.noTransaction++; console.log("NO_TRANSACTION"); }
+      const verdict = parseVerdict(line);
+      if (verdict.isNoTransaction) {
+        summary.noTransaction++; console.log("NO_TRANSACTION");
+        const challenge = challengeNoTransaction({ from: env.from, subject: env.subject, body: text, reason: verdict.reason });
+        if (challenge) { summary.challengedVerdicts++; console.log(`[dry-run-verdict-challenge] uid=${env.uid} ${challenge.reason}`); }
+      }
       else {
         console.log(`\n${line}\n`);
         const csv = /<<<CSV>>>\s*([\s\S]*?)\s*<<<END>>>/.exec(line)?.[1];

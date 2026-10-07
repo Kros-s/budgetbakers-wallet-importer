@@ -175,5 +175,14 @@ optimization: filter verified non-transaction notices before invoking the
 CLI. No new sender blocklist entries were silently applied by this test.
 This window validates retrieval, provider execution, and clarification
 behavior; it does not validate extraction of a complete real transaction.
-The updated code passes 593 tests, including exact time boundaries and
+The updated code passes 595 tests, including exact time boundaries and
 folder-isolated UID/watermark regressions.
+
+The deterministic verdict review initially challenged one correctly discarded
+Amex travel-points promotion. Its subject did not match the existing marketing
+patterns, and hypothetical points redemption amounts resembled a movement.
+A targeted promotion-pattern fix now recognizes that subject while retaining
+the exception for a completed credit with an actual amount. Two regression
+tests cover both cases. Dry-run also reports `challengedVerdicts`, so model
+verdicts and the production safeguard can be assessed separately. The saved
+model responses were rechecked without additional AI calls.
