@@ -251,3 +251,48 @@ Private run evidence:
 `/opt/bbw/data/backups-full/bbw-state-2026-10-07-1314.tar.gz`.
 The normal end-of-run retention sweep removed 7 expired ledgers and 6 old
 cached attachments. No timer schedule or stack placement was changed.
+
+## Remaining-days recovery — October 7, 2026
+
+The user authorized the remaining official windows. October 2 through
+October 6 ran sequentially using `--day`; October 7 ran only through the
+current cutoff, rather than advancing coverage to a future 20:00. INBOX
+and Archive completed for every window, with no failures or quota pauses.
+
+| Scheduled day | Emails | Filtered | No transaction | Wallet writes | New proposals | Clarifications | Category follow-ups |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| October 2 | 22 | 4 | 16 | 2 | 0 | 0 | 0 |
+| October 3 | 19 | 6 | 10 | 1 | 0 | 2 | 1 |
+| October 4 | 14 | 4 | 10 | 0 | 0 | 0 | 0 |
+| October 5 | 27 | 6 | 16 | 2 | 0 | 3 | 1 |
+| October 6 | 51 | 6 | 37 | 4 | 0 | 4 | 2 |
+| October 7 through 13:36 CDMX | 30 | 5 | 20 | 2 | 2 | 1 | 2 |
+| Total | 163 | 31 | 109 | 11 | 2 | 10 | 6 |
+
+Category follow-ups are questions for already-written records with a
+provisional category; they are separate from the clarification status.
+Proposals require the user's approval before writing. The 11 ledger record
+IDs were read back from live Wallet and verified to exist. The six
+provisional categories remain subject to the user's Telegram replies.
+
+After recovery, the actual `bbw-daily.service` was manually started to
+verify its systemd environment. It completed with `Result=success` and
+`ExecMainStatus=0`, making zero additional AI calls. Shared coverage ends
+at `2026-10-07T19:39:11.338Z` (13:39:11 CDMX); the bot and daily timer are
+active, with the next normal run at October 7 20:00 CDMX. The overlap scan
+recognizes previously processed mail rather than rerunning inference.
+
+Inference usage for these remaining windows: 132 Codex calls, 1,350,836
+input tokens including 1,081,856 cached tokens, and 1,842 output tokens.
+No duplicate Wallet records were written by the normal service validation.
+
+Private operational evidence is under
+`/opt/bbw/change-backups/ai-20261007/`: per-window `official-*.log`,
+`remaining-days-status.json`, `remaining-days-summary.json`,
+`remaining-days-wallet-verification.json`, and
+`normal-service-validation.log`. The deployment evidence JSON includes
+these verified results. Local-state backup before recovery:
+`/opt/bbw/data/backups-full/bbw-state-2026-10-07-1325.tar.gz`.
+An additional Wallet snapshot was taken during the first recovered window:
+`/opt/bbw/data/backups-full/couch-full-2026-10-07-1327.json.gz`.
+No production code, stack location, or timer schedule changed during recovery.
