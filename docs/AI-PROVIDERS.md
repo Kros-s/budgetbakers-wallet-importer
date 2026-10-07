@@ -104,3 +104,15 @@ Los timers siguen habilitados con sus horarios existentes.
 
 La revisión exacta del código desplegado se registra en
 `/opt/bbw/data/deployments/ai-20261007.json`; no contiene secretos.
+
+### Actualización posterior de iCloud
+
+El usuario renovó la contraseña y reinició el bot. Acceso IMAP comprobado:
+87 correos desde el 1 de octubre; se leyeron muestras sin cambiar flags,
+ledgers ni marcas de procesamiento. El identificador de cuenta configurado
+coincide con el respaldo anterior, así que no se cambió de identidad de
+buzón por esta actualización. Dos respuestas reales de Luna fueron
+NO_TRANSACTION y una aclaración (sin escrituras). Las pruebas sintéticas
+sí verificaron extracción CSV y lectura del texto PDF. La corrida completa
+de producción no se ejecutó manualmente; sigue programada para las 20:00
+CDMX. El bloqueo de autenticación IMAP quedó resuelto.
