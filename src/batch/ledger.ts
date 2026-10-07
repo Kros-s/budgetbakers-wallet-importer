@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { createHash } from "node:crypto";
 
 /**
  * Per-run ledger for the batch processor. One JSON file per local day
@@ -34,6 +35,8 @@ export interface ClassifiedOut {
 }
 
 export interface RunLedger {
+  folder?: string;                  // legacy ledgers belong to INBOX
+  uidValidity?: string;
   day: string;                       // local YYYY-MM-DD of the run
   window: { from: string; to: string };
   status: "running" | "complete" | "failed" | "paused";
@@ -46,7 +49,7 @@ export interface RunLedger {
 }
 
 const LEDGER_DIR = path.resolve("data/bot");
-const LEDGER_RE = /^day-ledger-(\d{4}-\d{2}-\d{2})\.json$/;
+const LEDGER_RE = /^day-ledger-(\d{4}-\d{2}-\d{2})(?:-[a-f0-9]{12})?\.json$/;
 
 export function localDayStr(d: Date = new Date()): string {
   const y = d.getFullYear();
@@ -55,13 +58,14 @@ export function localDayStr(d: Date = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
-export function ledgerPath(day: string): string {
-  return path.join(LEDGER_DIR, `day-ledger-${day}.json`);
+export function ledgerPath(day: string, folder = "INBOX"): string {
+  const suffix = folder === "INBOX" ? "" : "-" + createHash("sha256").update(folder).digest("hex").slice(0, 12);
+  return path.join(LEDGER_DIR, `day-ledger-${day}${suffix}.json`);
 }
 
-export function loadLedger(day: string): RunLedger | null {
+export function loadLedger(day: string, folder = "INBOX"): RunLedger | null {
   try {
-    return JSON.parse(fs.readFileSync(ledgerPath(day), "utf8")) as RunLedger;
+    return JSON.parse(fs.readFileSync(ledgerPath(day, folder), "utf8")) as RunLedger;
   } catch {
     return null;
   }
@@ -69,7 +73,7 @@ export function loadLedger(day: string): RunLedger | null {
 
 export function saveLedger(ledger: RunLedger): void {
   fs.mkdirSync(LEDGER_DIR, { recursive: true });
-  const p = ledgerPath(ledger.day);
+  const p = ledgerPath(ledger.day, ledger.folder);
   const tmp = `${p}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2));
   fs.renameSync(tmp, p); // atomic on the same fs — a crash never corrupts it
@@ -80,9 +84,12 @@ export function saveLedger(ledger: RunLedger): void {
  * for today (earlier manual run + scheduled run), the new window is merged
  * and processed uids are preserved.
  */
-export function openLedger(from: Date, to: Date, day = localDayStr()): RunLedger {
-  const existing = loadLedger(day);
+export function openLedger(from: Date, to: Date, day = localDayStr(), folder = "INBOX", uidValidity?: bigint): RunLedger {
+  const existing = loadLedger(day, folder);
   if (existing) {
+    if (uidValidity !== undefined && existing.uidValidity !== undefined && existing.uidValidity !== uidValidity.toString()) throw new Error("Mailbox UIDVALIDITY changed; refusing to merge incompatible ledgers");
+    existing.folder = folder;
+    existing.uidValidity = uidValidity?.toString() ?? existing.uidValidity;
     existing.window = {
       from: new Date(Math.min(Date.parse(existing.window.from), from.getTime())).toISOString(),
       to: new Date(Math.max(Date.parse(existing.window.to), to.getTime())).toISOString(),
@@ -92,6 +99,7 @@ export function openLedger(from: Date, to: Date, day = localDayStr()): RunLedger
     return existing;
   }
   const fresh: RunLedger = {
+    folder, uidValidity: uidValidity?.toString(),
     day,
     window: { from: from.toISOString(), to: to.toISOString() },
     status: "running",
@@ -106,9 +114,10 @@ export function openLedger(from: Date, to: Date, day = localDayStr()): RunLedger
 }
 
 /** All uids any ledger has fully processed or classified out (idempotency set). */
-export function uidsKnownToLedgers(): Set<number> {
+export function uidsKnownToLedgers(folder = "INBOX", uidValidity?: bigint): Set<number> {
   const known = new Set<number>();
   for (const l of listLedgers()) {
+    if ((l.folder ?? "INBOX") !== folder || (uidValidity !== undefined && l.uidValidity !== undefined && l.uidValidity !== uidValidity.toString())) continue;
     for (const uid of l.uidsProcessed) known.add(uid);
     for (const c of l.classifiedOut) known.add(c.uid);
   }
@@ -140,8 +149,8 @@ export function listLedgers(): RunLedger[] {
  * usage limit must not advance the watermark, so the next window re-covers it
  * and picks up the emails it never reached.
  */
-export function latestWatermark(): Date | null {
-  const complete = listLedgers().filter((l) => l.status === "complete");
+export function latestWatermark(folder = "INBOX"): Date | null {
+  const complete = listLedgers().filter((l) => l.status === "complete" && (l.folder ?? "INBOX") === folder);
   if (complete.length === 0) return null;
   const newest = complete.reduce((a, b) =>
     Date.parse(a.window.to) >= Date.parse(b.window.to) ? a : b);

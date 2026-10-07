@@ -25,6 +25,8 @@ import PostalMime from "postal-mime";
 import { Telegraf } from "telegraf";
 
 import { loadEnvLocal } from "../env.js";
+import { convertRows, parseCsv } from "../csv.js";
+import { parseVerdict } from "../webhook/verdict.js";
 import { buildImapClient } from "../imap/client.js";
 import { imapSearchWindow, inProcessingWindow } from "../imap/window.js";
 import { getAiMode, aiModels } from "../bot/ai-policy.js";
@@ -101,7 +103,7 @@ function resolveWindow(args: Args): { from: Date; to: Date } {
   if (args.from) {
     return { from: new Date(args.from.includes("T") ? args.from : `${args.from}T00:00:00`), to };
   }
-  const watermark = latestWatermark();
+  const watermark = latestWatermark(args.folder);
   if (!watermark) {
     throw new Error("No hay watermark (ningún ledger complete). Pasa --from la primera vez.");
   }
@@ -169,8 +171,8 @@ function confirm(question: string): Promise<boolean> {
   });
 }
 
-async function undoRun(day: string, yes: boolean): Promise<void> {
-  const ledger = loadLedger(day);
+async function undoRun(day: string, yes: boolean, folder = "INBOX"): Promise<void> {
+  const ledger = loadLedger(day, folder);
   if (!ledger) throw new Error(`No existe ledger para ${day}`);
   if (ledger.records.length === 0) {
     console.log(`Ledger ${day} no tiene registros escritos — nada que deshacer.`);
@@ -205,7 +207,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.undoRun) {
-    await undoRun(args.undoRun, args.yes);
+    await undoRun(args.undoRun, args.yes, args.folder);
     return;
   }
 
@@ -224,9 +226,10 @@ async function main() {
   console.log(`${envelopes.length} correo(s) en la ventana.`);
 
   const oldStore = getProcessed(args.folder, uidValidity);
-  const ledgerKnown = uidsKnownToLedgers();
+  const ledgerKnown = uidsKnownToLedgers(args.folder, uidValidity);
   const failedRetryable = new Map<number, number>(); // uid → attempts so far
   for (const l of listLedgers()) {
+    if ((l.folder ?? "INBOX") !== args.folder || (l.uidValidity !== undefined && l.uidValidity !== uidValidity.toString())) continue;
     for (const f of l.uidsFailed) {
       if (args.force || f.attempts < MAX_ATTEMPTS) failedRetryable.set(f.uid, f.attempts);
     }
@@ -285,7 +288,7 @@ async function main() {
   const deps: EmailDeps = {
     bot, config, couch, userId: credentials.userId, lookup, notificationChatId, walletDedup, merchantCategory,
   };
-  const ledger = openLedger(from, to);
+  const ledger = openLedger(from, to, undefined, args.folder, uidValidity);
 
   for (const env of blocked) {
     markClassifiedOut(ledger, { uid: env.uid, from: env.from, subject: env.subject });
@@ -557,7 +560,8 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
   const couch = buildCouchClient(credentials.replication);
   const { check: walletDedup, existingCount } = await buildWalletDedup(couch, from, to);
   console.log(`dedup Wallet: ${existingCount} registro(s) existentes en ventana ±48h.\n`);
-  void walletDedup; // full row→record conversion happens live; dry-run reports raw CSV
+  const lookup = buildLookupMapsFromData(await fetchLookupData(couch));
+  const summary = { candidates: toProcess.length, blocked: blocked.length, completed: 0, noTransaction: 0, clarifications: 0, proposedRows: 0, duplicateRows: 0, invalidRows: 0, errors: 0, paused: false };
 
   for (const b of blocked) console.log(`🚫 uid=${b.uid} ${b.from} — "${b.subject.slice(0, 60)}" (clasificador)`);
 
@@ -574,6 +578,7 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
       const text = await extractBody(msg.source);
       if (!text) {
         console.log("(cuerpo vacío)");
+        summary.completed++; summary.noTransaction++;
         continue;
       }
       const result = await runAgent({
@@ -587,18 +592,33 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
         model: EMAIL_MODEL,
       });
       const line = result.text.trim();
-      if (line === "NO_TRANSACTION" || line.endsWith("NO_TRANSACTION")) console.log("NO_TRANSACTION");
-      else console.log(`\n${line}\n`);
+      summary.completed++;
+      if (parseVerdict(line).isNoTransaction) { summary.noTransaction++; console.log("NO_TRANSACTION"); }
+      else {
+        console.log(`\n${line}\n`);
+        const csv = /<<<CSV>>>\s*([\s\S]*?)\s*<<<END>>>/.exec(line)?.[1];
+        if (csv) {
+          const converted = convertRows(parseCsv(csv, Object.keys(lookup.categories)), lookup);
+          summary.invalidRows += converted.skipped.length;
+          summary.proposedRows += converted.records.length;
+          for (let j = 0; j < converted.records.length; j++) {
+            if (walletDedup(converted.records[j], converted.originalRows[j])) summary.duplicateRows++;
+          }
+        } else summary.clarifications++;
+      }
     } catch (err) {
       if (err instanceof UsageLimitError) {
+        summary.paused = true;
         console.log(`\n⏸ límite de uso alcanzado en ${i + 1}/${toProcess.length} — corte del dry-run.`);
         break;
       }
+      summary.errors++;
       console.log(`✖ ${err instanceof Error ? err.message.slice(0, 150) : err}`);
     }
   }
+  console.log(`[dry-run-summary] ${JSON.stringify(summary)}`);
   console.log("\nDRY-RUN terminado — no se escribió nada (ni ledger, ni store, ni Wallet, ni Telegram).");
-  process.exit(0);
+  process.exit(summary.errors || summary.paused ? 1 : 0);
 }
 
 main().catch((err) => {

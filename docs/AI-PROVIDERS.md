@@ -131,3 +131,22 @@ Dry-run proposes extraction results without writing to Wallet, Telegram,
 ledgers, or the processed store. It still consumes model usage. Its private
 output is stored in
 `/opt/bbw/change-backups/ai-20261007/first-missing-day-dry-run.log`.
+
+## Archived email recovery
+
+The daily timer reads INBOX only. Moving an unprocessed email to Archive
+removes it from that path, but the message remains available in Archive.
+No messages need to be moved back for a read-only test. Use `--folder Archive`
+with explicit dates and `--dry-run` to inspect a missing window.
+
+IMAP UIDs are local to a folder. Ledgers, retries, and watermarks now keep
+folders separate; legacy ledgers belong to INBOX. Archive ledgers use a
+folder-derived filename suffix, and changes in UIDVALIDITY cannot be merged
+into an incompatible existing ledger. Wallet record deduplication remains
+necessary because moving a message can change its UID. Dry-run summaries
+include proposed rows, duplicates already in Wallet, invalid rows,
+clarifications, errors, and provider pauses. A failed or paused dry-run exits
+with a failure status and never advances a watermark.
+
+Only the test is being run against Archive; this update does not change the
+daily timer to scan it automatically or perform a live Archive backfill.

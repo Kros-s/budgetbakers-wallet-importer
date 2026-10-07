@@ -150,3 +150,17 @@ test("one account's statements are never another's — banorte vs banorte-debito
     fs.rmSync("data", { recursive: true, force: true });
   }
 });
+
+test("Archive UIDs, failed attempts, and watermarks do not collide with INBOX", () => {
+ const inbox=openLedger(from,to,"2026-08-04","INBOX",1n);markUidProcessed(inbox,7);closeLedger(inbox,"complete");
+ const archive=openLedger(to,new Date(to.getTime()+86400000),"2026-08-04","Archive",2n);
+ assert.deepEqual([...uidsKnownToLedgers("Archive",2n)],[]);
+ markUidProcessed(archive,7);markUidFailed(archive,8,"test","test","test");closeLedger(archive,"complete");
+ assert.deepEqual(loadLedger("2026-08-04")?.uidsProcessed,[7]);
+ assert.equal(loadLedger("2026-08-04")?.uidsFailed.length,0);
+ assert.equal(loadLedger("2026-08-04","Archive")?.uidsFailed.length,1);
+ assert.equal(latestWatermark()?.toISOString(),to.toISOString());
+ assert.equal(latestWatermark("Archive")?.toISOString(),new Date(to.getTime()+86400000).toISOString());
+ assert.deepEqual([...uidsKnownToLedgers("Archive",3n)],[]);
+ assert.throws(()=>openLedger(from,to,"2026-08-04","Archive",3n),/UIDVALIDITY/);
+});
