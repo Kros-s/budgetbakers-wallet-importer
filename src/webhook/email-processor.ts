@@ -9,7 +9,7 @@ import { applyMerchantHistory, type MerchantLookup } from "./merchant-history.js
 import { referenceDate } from "./queue-audit.js";
 import { writeRecords } from "../records.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
-import { runClaude } from "../bot/claude-runner.js";
+import { runAgent } from "../bot/ai-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { challengeNoTransaction, claimsAlreadyRecorded, parseVerdict } from "./verdict.js";
 import { findExistingByAmount } from "./wallet-context.js";
@@ -286,7 +286,8 @@ export async function processEmail(
 
   // Fresh isolated session + Haiku per email — never resumed, never shared.
   const sessionId = uuidv4();
-  const result = await runClaude({
+  const result = await runAgent({
+    task: "email",
     config,
     sessionId,
     isFirstTurn: true,

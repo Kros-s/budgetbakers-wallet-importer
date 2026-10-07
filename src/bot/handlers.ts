@@ -7,7 +7,7 @@
  *  2. If the user was awaiting a confirmation and replies "si"/"confirmar",
  *     we hand the pending CsvRow[] to writeRecords and bypass Claude.
  *  3. Otherwise we build a prompt (text + optional file path), call
- *     runClaude, and inspect the reply for a fenced CSV block. If found,
+ *     runAgent, and inspect the reply for a fenced CSV block. If found,
  *     we stash it as pending and ask the user to confirm. If not, we
  *     just relay Claude's text to Telegram.
  *
@@ -32,7 +32,8 @@ import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import type { Logger } from "../logger.js";
 
 import type { BotConfig } from "./config.js";
-import { runClaude, StaleSessionError } from "./claude-runner.js";
+import { aiStatus, clearAiHealth, isAiMode, setAiMode } from "./ai-policy.js";
+import { runAgent, StaleSessionError } from "./ai-runner.js";
 import { downloadTelegramFile } from "./telegram-files.js";
 import { transcribeAudio } from "./whisper.js";
 import {
@@ -266,12 +267,13 @@ async function processUserTurn(
   // ~/.claude — the state after a host migration. Losing the context is
   // unavoidable there; losing the user's message is not, so start a fresh
   // session and replay this turn into it.
-  const invoke = () => runClaude({
+  const invoke = () => runAgent({
+    task: "chat",
     config,
     sessionId: activeSession.claudeSessionId,
     isFirstTurn,
     prompt,
-    appendSystemPrompt: systemPrompt,
+    appendSystemPrompt: systemPrompt + `\nCatálogo vigente: cuentas ${JSON.stringify(Object.keys(deps.lookup.accounts))}; categorías ${JSON.stringify(Object.keys(deps.lookup.categories))}; labels ${JSON.stringify(Object.keys(deps.lookup.labels))}.`,
     disallowedTools: [
       "Bash(node*)",
       "Bash(npm*)",
@@ -303,7 +305,9 @@ async function processUserTurn(
 
   markTurnSent(activeSession.chatId);
 
-  log("Claude turn", {
+  log("AI turn", {
+    provider: result.provider,
+    model: result.model,
     chatId: activeSession.chatId,
     sessionId: activeSession.claudeSessionId,
     isFirstTurn,
@@ -315,7 +319,7 @@ async function processUserTurn(
 
   if (!result.ok) {
     await ctx.reply(
-      `⚠️ Claude reportó un error: ${result.text.slice(0, 500)}\n\n` +
+      `⚠️ IA reportó un error: ${result.text.slice(0, 500)}\n\n` +
         `Reintenta, o usa /reset para empezar la conversación de cero.`
     );
     return;
@@ -708,6 +712,14 @@ export function registerHandlers(deps: HandlerDeps): void {
     return next();
   });
 
+  bot.command("ai", async (ctx) => {
+    const arg = ctx.message.text.trim().split(/\s+/)[1];
+    if (arg === "retry") clearAiHealth();
+    else if (arg && isAiMode(arg)) setAiMode(arg);
+    else if (arg) { await ctx.reply("Uso: /ai [auto|claude|codex|retry]"); return; }
+    await ctx.reply(aiStatus());
+  });
+
   bot.command("start", async (ctx) => {
     const s = getOrCreateSession(ctx.chat.id);
     await ctx.reply(
@@ -898,7 +910,9 @@ export function registerHandlers(deps: HandlerDeps): void {
     chatId: number,
     localPath: string
   ): Promise<boolean> {
-    const detection = await runClaude({
+    const detection = await runAgent({
+      task: "statement",
+      files: [localPath],
       config: d.config,
       sessionId: uuidv4(),
       isFirstTurn: true,

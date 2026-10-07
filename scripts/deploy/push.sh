@@ -12,6 +12,13 @@
 set -euo pipefail
 
 HOST="${1:-root@10.40.40.24}"
+PROXMOX_MODE=false
+if [ "$HOST" = "--proxmox" ]; then
+  PROXMOX_MODE=true
+  HOST="${2:-proxmox}"
+fi
+RSYNC_EXTRA=()
+if $PROXMOX_MODE; then RSYNC_EXTRA=(--rsync-path='sudo pct exec 200 -- rsync'); fi
 APP_DIR=/opt/bbw
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -21,16 +28,23 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # No --delete, and above all no --delete-excluded: it implies --delete and
 # applies it to the excluded paths, so it would wipe data/ and .env.local on the
 # container — the pending queue, the learned rules and the watermark with them.
-rsync -az \
+rsync -az "${RSYNC_EXTRA[@]}" \
   --exclude node_modules \
   --exclude data \
   --exclude dist \
   --exclude Statements \
   --exclude .env.local \
   --exclude .git \
+  --exclude .claude \
+  --exclude change-backups \
   --exclude .DS_Store \
   -e ssh "$REPO_DIR/" "$HOST:$APP_DIR/"
 
-ssh "$HOST" "cd $APP_DIR && pnpm build && \
+DEPLOY_COMMAND="cd $APP_DIR && pnpm build && \
   chown bbw:bbw .env.local && chmod 600 .env.local && chown -R bbw:bbw data && \
   systemctl restart bbw-bot && systemctl is-active bbw-bot"
+if $PROXMOX_MODE; then
+  ssh "$HOST" "sudo pct exec 200 -- sh -lc '$DEPLOY_COMMAND'"
+else
+  ssh "$HOST" "$DEPLOY_COMMAND"
+fi

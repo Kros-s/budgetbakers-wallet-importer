@@ -22,7 +22,7 @@ import { Telegraf } from "telegraf";
 
 import { loadEnvLocal } from "../env.js";
 import { loadBotConfig } from "../bot/config.js";
-import { runClaude } from "../bot/claude-runner.js";
+import { runAgent } from "../bot/ai-runner.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { sendSafeMessage } from "../bot/telegram-safe.js";
 import { buildCouchClient, buildLookupMapsFromData, fetchLookupData } from "../couch.js";
@@ -475,7 +475,9 @@ async function main() {
 
   // ── Extract (fresh isolated Sonnet session; Read tool only) ──
   const profile = loadProfile(args.account);
-  const result = await runClaude({
+  const result = await runAgent({
+    task: "statement",
+    files: [args.pdf],
     config,
     sessionId: uuidv4(),
     isFirstTurn: true,

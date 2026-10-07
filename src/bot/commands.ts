@@ -13,6 +13,7 @@ export interface BotCommandSpec {
 
 /** Registered with Telegram so they appear in the "/" menu. */
 export const BOT_COMMANDS: BotCommandSpec[] = [
+  { command: "ai", description: "Proveedor IA: /ai auto | claude | codex | retry" },
   { command: "pending", description: "Ver pendientes · /pending 35 para el detalle" },
   { command: "remind", description: "Reenviar las más importantes (/remind 5)" },
   { command: "next", description: "Modo guiado: una pregunta a la vez (beta)" },
@@ -52,6 +53,7 @@ export const HELP_TEXT = [
   "```",
   "",
   "*Otros*",
+  "• `/ai` — estado global; `/ai auto`, `/ai claude`, `/ai codex` cambian bot y batch. `/ai retry` vuelve a probar Claude.",
   "• `/remind 5` — reenvía las más importantes para tenerlas a mano.",
   "• `/next` — modo guiado (beta): una pregunta a la vez, contestas con texto normal. La ventana dura 2 minutos; después de eso lo que escribas cuenta como mensaje nuevo. `/stop` para salir.",
   "• `/cancel` — descarta la propuesta que esté esperando confirmación.",

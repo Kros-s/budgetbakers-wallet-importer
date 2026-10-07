@@ -19,7 +19,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import { loadEnvLocal } from "../env.js";
 import { loadBotConfig } from "../bot/config.js";
-import { runClaude } from "../bot/claude-runner.js";
+import { runAgent } from "../bot/ai-runner.js";
 import { buildEmailPrompt, EMAIL_MODEL, EMAIL_SYSTEM_PROMPT } from "../webhook/email-processor.js";
 import { extractCsvBlock } from "../bot/handlers.js";
 import { challengeNoTransaction, parseVerdict } from "../webhook/verdict.js";
@@ -76,7 +76,8 @@ function seedFromClarifications(): void {
 
 async function classify(c: EvalCase): Promise<{ outcome: Expected; detail: string }> {
   const config = loadBotConfig();
-  const result = await runClaude({
+  const result = await runAgent({
+    task: "email",
     config,
     sessionId: uuidv4(),
     isFirstTurn: true,

@@ -69,7 +69,7 @@ export function loadBotConfig(): BotConfig {
     downloadDir: process.env.TELEGRAM_DOWNLOAD_DIR?.trim() || path.resolve("data/downloads"),
     claudeBin: process.env.CLAUDE_BIN?.trim() || "claude",
     claudeCwd: process.env.CLAUDE_CWD?.trim() || path.resolve(process.cwd()),
-    claudeModel: process.env.CLAUDE_MODEL?.trim() || null,
+    claudeModel: process.env.CLAUDE_MODEL?.trim() || "haiku",
     claudePermissionMode:
       process.env.CLAUDE_PERMISSION_MODE?.trim() || "bypassPermissions",
     whisperBin: process.env.WHISPER_BIN?.trim() || "whisper",

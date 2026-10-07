@@ -168,19 +168,23 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
   child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
   child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
 
+  child.stdin.on("error", () => {});
   child.stdin.write(prompt);
   child.stdin.end();
 
   const timeoutMs = opts.timeoutMs ?? 180_000;
-  const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
 
-  const code: number | null = await new Promise((resolve) => {
+  const code: number | null = await new Promise((resolve, reject) => {
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
     child.on("close", (c) => resolve(c));
   });
   clearTimeout(timer);
 
   const durationMs = Date.now() - start;
 
+  if (timedOut) throw new Error("AI_PROVIDER_TIMEOUT: claude");
   if (code !== 0) {
     const tail = stderr.trim().split("\n").slice(-5).join("\n");
     if (isStaleSessionText(stderr) || isStaleSessionText(stdout)) {

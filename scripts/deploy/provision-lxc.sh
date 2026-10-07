@@ -27,7 +27,7 @@ timedatectl set-timezone America/Mexico_City 2>/dev/null \
 echo "── Paquetes base"
 # gnupg + ca-certificates are required by the NodeSource setup script.
 apt-get update
-apt-get install -y ca-certificates curl gnupg unzip rsync git
+apt-get install -y ca-certificates curl gnupg unzip rsync git poppler-utils
 
 echo "── Node 22 + pnpm"
 if ! command -v node >/dev/null || [[ "$(node -v)" != v22* ]]; then
@@ -39,6 +39,8 @@ corepack enable
 echo "── Claude Code CLI"
 npm install -g @anthropic-ai/claude-code
 claude --version
+npm install -g @openai/codex@0.161.0
+codex --version
 
 echo "── Dependencias y build"
 cd "$APP_DIR"

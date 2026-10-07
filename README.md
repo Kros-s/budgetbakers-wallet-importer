@@ -10,6 +10,18 @@ All three share the same CouchDB connection, lookup maps, and Claude session inf
 
 ---
 
+## AI providers and deployment workflow
+
+The local repository is the source of truth: change and test code here,
+commit/push it, then deploy with `scripts/deploy/push.sh --proxmox` to LXC 200.
+Credentials and runtime data stay in the LXC. Do not develop inside production.
+
+Telegram `/ai` reports global settings. `/ai auto` uses Claude first and Codex
+only on provider failure; `/ai codex` and `/ai claude` force one provider.
+`/ai retry` clears the Claude cooldown for the next automatic task.
+The selection persists across restarts and also controls the daily batch.
+See [AI provider runbook](docs/AI-PROVIDERS.md) for models, limits and rollback.
+
 ## Production deployment
 
 **As of 2026-09-28, production runs on the `iubix` home lab (Proxmox),

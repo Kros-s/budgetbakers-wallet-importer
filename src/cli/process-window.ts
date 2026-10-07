@@ -36,7 +36,7 @@ import {
 } from "../batch/ledger.js";
 import { buildWalletDedup } from "../batch/wallet-dedup.js";
 import { loadBotConfig } from "../bot/config.js";
-import { runClaude, UsageLimitError } from "../bot/claude-runner.js";
+import { runAgent, UsageLimitError } from "../bot/ai-runner.js";
 import { checkRunIntegrity, formatFindings } from "../batch/integrity.js";
 import { pruneBotLogs, pruneLedgers, pruneVerdictLogs } from "../batch/retention.js";
 import { listClarifications } from "../webhook/clarification-store.js";
@@ -572,7 +572,8 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
         console.log("(cuerpo vacío)");
         continue;
       }
-      const result = await runClaude({
+      const result = await runAgent({
+    task: "email",
         config,
         sessionId: uuidv4(),
         isFirstTurn: true,
@@ -598,5 +599,7 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
 
 main().catch((err) => {
   console.error("\nError:", err instanceof Error ? err.message : err);
+  const serverCode = (err as { serverResponseCode?: string })?.serverResponseCode;
+  if (serverCode) console.error(`IMAP serverResponseCode: ${serverCode}`);
   process.exit(1);
 });
