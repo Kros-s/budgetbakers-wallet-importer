@@ -10,6 +10,8 @@ All three share the same CouchDB connection and lookup maps. AI extraction uses 
 
 ---
 
+Project documentation is maintained in English; Telegram user-facing text remains in Spanish.
+
 ## AI providers and deployment workflow
 
 The local repository is the source of truth: change and test code here,

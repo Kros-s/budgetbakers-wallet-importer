@@ -150,3 +150,30 @@ with a failure status and never advances a watermark.
 
 Only the test is being run against Archive; this update does not change the
 daily timer to scan it automatically or perform a live Archive backfill.
+
+### First missing window: Archive test results — 2026-10-07
+
+The first window had no emails in INBOX because the messages had been
+archived. Archive contained 33 messages for the same exact window. A complete
+Archive dry-run passed: 5 messages were filtered before AI, and Codex Luna
+processed the remaining 28. Results: 27 non-transaction verdicts and one
+clarification asking which account paid for the Sam's Club purchase.
+No CSV rows were proposed, no validation errors occurred, and no provider
+pause occurred. Wallet's read-only dedup snapshot contained 3 existing
+records around the window. No duplicate candidates could be evaluated
+because the model produced no complete transaction rows.
+
+Financial-state hashes under `data/bot` and `data/imap` matched before and
+after the run. No movements were written, Telegram questions sent, or
+watermarks advanced. The private raw log is
+`/opt/bbw/change-backups/ai-20261007/archive-2026-10-01-dry-run.log`.
+
+Usage: 28 calls, 290,466 input tokens, including 160,000 cached input tokens,
+and 180 output tokens. Most responses concerned newsletters, Apple account
+security/data-export notices, and promotions. This exposes a useful future
+optimization: filter verified non-transaction notices before invoking the
+CLI. No new sender blocklist entries were silently applied by this test.
+This window validates retrieval, provider execution, and clarification
+behavior; it does not validate extraction of a complete real transaction.
+The updated code passes 593 tests, including exact time boundaries and
+folder-isolated UID/watermark regressions.
