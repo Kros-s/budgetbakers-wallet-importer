@@ -1,6 +1,6 @@
 /**
  * Read-only duplicate audit over REAL Wallet records written by the bot
- * (note starts with "[Claude"). Clusters likely duplicates and produces a
+ * (note starts with a writer marker). Clusters likely duplicates and produces a
  * per-day report for user approval — NOTHING is deleted here.
  *
  *   npx tsx src/cli/audit-duplicates.ts [--since 2026-05-11] [--slack-hours 48]
@@ -17,6 +17,7 @@ import { buildCouchClient } from "../couch.js";
 import { loadDirectCredentials } from "../direct-auth.js";
 import { listRecordsByDateRange } from "../records.js";
 import type { WalletRecord } from "../types.js";
+import { MARKER_AT_START } from "../csv.js";
 
 interface BotRecord {
   id: string;
@@ -97,9 +98,9 @@ async function main() {
   console.log(`\n── Auditoría de duplicados (solo lectura) ── desde ${since}\n`);
   const all = await listRecordsByDateRange(couch, `${since}T00:00:00`, new Date().toISOString());
   const botRecords = all
-    .filter((d) => typeof d.note === "string" && d.note.startsWith("[Claude"))
+    .filter((d) => typeof d.note === "string" && MARKER_AT_START.test(d.note))
     .map((d) => toBotRecord(d as WalletRecord & { _id: string }));
-  console.log(`${all.length} registro(s) en el rango; ${botRecords.length} escritos por el bot ([Claude).`);
+  console.log(`${all.length} registro(s) en el rango; ${botRecords.length} escritos por el bot (marcador).`);
 
   const clusters = clusterDuplicates(botRecords, slackMs);
 

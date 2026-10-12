@@ -49,6 +49,7 @@ import { stringify } from "csv-stringify/sync";
 import { toLocalIsoDateTime } from "./date-time.js";
 import { RECORD_TYPE, PAYMENT_TYPE } from "./records.js";
 import type { LookupMaps, NewRecord } from "./types.js";
+import type { AiProvider } from "./bot/ai-policy.js";
 
 /** Raw row shape after csv-parse with `columns: true`. */
 export interface CsvRow {
@@ -381,24 +382,36 @@ export function parseCsv(content: string, knownCategories?: Iterable<string>): C
  * `snapshot undo` and indistinguishable from what the user typed by hand. A
  * marker that decides whether a mistake is reversible cannot be a suggestion.
  *
- * Any existing `[Claude …]` is respected, so the statement path's exact
+ * Any existing marker is respected, so the statement path's exact
  * `[Claude reconcile YYYY-MM]`, which `undo` matches verbatim, is never altered.
  *
- * `provider` names which model actually wrote the row when it was not Claude.
- * The bot gained a Codex fallback on 07-oct and every record it produced still
- * read "[Claude …]", so twenty October records claimed an origin they did not
- * have — and a pipeline whose whole discipline is checking the source cannot
- * have a marker that misreports it. The word "Claude" stays at the front
- * regardless: `audit-duplicates` selects on `startsWith("[Claude")` and `undo`
- * matches the reconcile marker verbatim, and neither should care which model
- * was on call that night.
+ * `provider` names which model actually wrote the row. The bot gained a Codex
+ * fallback on 07-oct and every record it produced still read "[Claude …]", so
+ * twenty October records claimed an origin they did not have — and a pipeline
+ * whose whole discipline is checking the source cannot have a marker that
+ * misreports it.
+ *
+ * The writer's own name leads the marker, so a Codex row reads
+ * "[Codex 2026-10-12]". `MARKER_RE` and `MARKER_AT_START` are built from the
+ * same `WRITER_NAME` map that produces the marker, which is keyed by
+ * `AiProvider` — so a third provider is one edit that the compiler demands,
+ * and `audit-duplicates` keeps selecting every row the bot wrote without
+ * being touched. Markers already written as "[Claude <day> codex]" still match
+ * both, so nothing in Wallet needs rewriting.
  */
-export function stampMarker(rows: CsvRow[], day: string, provider?: string): CsvRow[] {
-  const via = provider && provider !== "claude" ? ` ${provider}` : "";
-  const marker = `[Claude ${day}${via}]`;
+export const WRITER_NAME: Record<AiProvider, string> = { claude: "Claude", codex: "Codex" };
+
+/** Matches a marker anywhere in a note; the guard against stamping twice. */
+export const MARKER_RE = new RegExp(`\\[(?:${Object.values(WRITER_NAME).join("|")})\\b`);
+
+/** Matches a note that *starts* with a marker: a row the bot wrote itself. */
+export const MARKER_AT_START = new RegExp(`^\\[(?:${Object.values(WRITER_NAME).join("|")})\\b`);
+
+export function stampMarker(rows: CsvRow[], day: string, provider?: AiProvider): CsvRow[] {
+  const marker = `[${WRITER_NAME[provider ?? "claude"]} ${day}]`;
   return rows.map((r) => {
     const note = (r.note ?? "").trim();
-    if (/\[Claude\b/.test(note)) return r;
+    if (MARKER_RE.test(note)) return r;
     return { ...r, note: note ? `${note} ${marker}` : marker };
   });
 }

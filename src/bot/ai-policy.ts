@@ -44,6 +44,6 @@ export function aiStatus(): string {
   return `Modo global: ${mode}\nRuta: ${providerOrder(mode, health).join(" → ")}\n` +
     (health.until > Date.now() ? `Claude pausado hasta ${new Date(health.until).toLocaleString("es-MX", { timeZone: "America/Mexico_City" })} CDMX: ${health.reason}\n` : "") +
     `Codex: correos ${models.email} / low; chat ${models.chat} / low; estados ${models.statement} / medium.\n` +
-    `Claude: correos ${process.env.EMAIL_CLAUDE_MODEL || "claude-haiku-4-5"}; chat ${process.env.CLAUDE_MODEL || "haiku"}; estados ${process.env.STATEMENT_CLAUDE_MODEL || "claude-sonnet-5-5"}.\n` +
+    `Claude: correos ${process.env.EMAIL_CLAUDE_MODEL || "claude-haiku-5-5"}; chat ${process.env.CLAUDE_MODEL || "haiku"}; estados ${process.env.STATEMENT_CLAUDE_MODEL || "claude-sonnet-5-5"}.\n` +
     `Aplicación: siguiente tarea; también batch diario. /ai auto | claude | codex | retry`;
 }

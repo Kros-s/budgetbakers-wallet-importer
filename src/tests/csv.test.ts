@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { toIso, convertRows, parseCsv, rowsToCsv, type CsvRow, stampMarker } from "../csv.js";
+import { toIso, convertRows, parseCsv, rowsToCsv, type CsvRow, stampMarker, MARKER_AT_START } from "../csv.js";
 import type { LookupMaps } from "../types.js";
 
 test("toIso parses US short date with space separator", () => {
@@ -496,11 +496,11 @@ test("an existing marker is never altered, least of all the one undo matches", (
   assert.equal(rows[1].note, "x [Claude 2026-09-01]");
 });
 
-test("the marker names the model that wrote the row when it was not Claude", () => {
+test("the marker names the model that wrote the row", () => {
   // The bot gained a Codex fallback on 07-oct and kept stamping "[Claude …]".
   // Twenty October records claimed an origin they did not have.
   const [row] = stampMarker([{ date: "", account: "", amount: "-1", category: "Others", note: "", payee: "" }], "2026-10-12", "codex");
-  assert.equal(row.note, "[Claude 2026-10-12 codex]");
+  assert.equal(row.note, "[Codex 2026-10-12]");
 });
 
 test("the marker is unchanged when Claude wrote the row, or when no provider is given", () => {
@@ -509,10 +509,22 @@ test("the marker is unchanged when Claude wrote the row, or when no provider is 
   assert.equal(stampMarker([base], "2026-10-12")[0].note, "[Claude 2026-10-12]");
 });
 
-test("every marker still starts with [Claude, which is what audit-duplicates selects on", () => {
-  // audit-duplicates filters note.startsWith("[Claude"); naming the provider
-  // must not hide a record from the duplicate scan.
-  const [row] = stampMarker([{ date: "", account: "", amount: "-1", category: "Others", note: "OXXO", payee: "" }], "2026-10-12", "codex");
-  assert.ok(row.note.includes("[Claude"));
-  assert.ok(/\[Claude\b/.test(row.note));
+test("audit-duplicates still selects a row Codex wrote", () => {
+  // The filter used to be startsWith("[Claude"), so renaming the writer would
+  // have hidden every Codex record from the duplicate scan — the one reader
+  // that catches a double write.
+  const [row] = stampMarker([{ date: "", account: "", amount: "-1", category: "Others", note: "", payee: "" }], "2026-10-12", "codex");
+  assert.ok(MARKER_AT_START.test(row.note));
+  assert.ok(MARKER_AT_START.test("[Claude 2026-10-12]"));
+  assert.ok(MARKER_AT_START.test("[Claude reconcile 2026-09]"));
+  // Records already written in the old format stay auditable.
+  assert.ok(MARKER_AT_START.test("[Claude 2026-10-12 codex]"));
+  // A note the user typed is not a bot record.
+  assert.ok(!MARKER_AT_START.test("OXXO [Claude 2026-10-12]"));
+  assert.ok(!MARKER_AT_START.test("pago de renta"));
+});
+
+test("a row that already carries any writer marker is not stamped twice", () => {
+  const rows = stampMarker([{ date: "", account: "", amount: "-1", category: "Others", note: "[Codex 2026-10-11]", payee: "" }], "2026-10-12", "claude");
+  assert.equal(rows[0].note, "[Codex 2026-10-11]");
 });

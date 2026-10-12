@@ -94,7 +94,7 @@ export interface EmailPayload {
  * overflow in long/reused sessions used to break the pipeline, and bank
  * alerts don't need a bigger model. Statements/PDFs use Sonnet elsewhere.
  */
-export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-4-5";
+export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-5-5";
 
 /** Cap on the email body fed to the prompt — bank alerts are short; anything
  * bigger is marketing bloat that can blow the context. */
