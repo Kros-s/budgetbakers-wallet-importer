@@ -383,9 +383,19 @@ export function parseCsv(content: string, knownCategories?: Iterable<string>): C
  *
  * Any existing `[Claude …]` is respected, so the statement path's exact
  * `[Claude reconcile YYYY-MM]`, which `undo` matches verbatim, is never altered.
+ *
+ * `provider` names which model actually wrote the row when it was not Claude.
+ * The bot gained a Codex fallback on 07-oct and every record it produced still
+ * read "[Claude …]", so twenty October records claimed an origin they did not
+ * have — and a pipeline whose whole discipline is checking the source cannot
+ * have a marker that misreports it. The word "Claude" stays at the front
+ * regardless: `audit-duplicates` selects on `startsWith("[Claude")` and `undo`
+ * matches the reconcile marker verbatim, and neither should care which model
+ * was on call that night.
  */
-export function stampMarker(rows: CsvRow[], day: string): CsvRow[] {
-  const marker = `[Claude ${day}]`;
+export function stampMarker(rows: CsvRow[], day: string, provider?: string): CsvRow[] {
+  const via = provider && provider !== "claude" ? ` ${provider}` : "";
+  const marker = `[Claude ${day}${via}]`;
   return rows.map((r) => {
     const note = (r.note ?? "").trim();
     if (/\[Claude\b/.test(note)) return r;

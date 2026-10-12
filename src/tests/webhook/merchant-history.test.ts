@@ -82,3 +82,19 @@ test("a payment processor does not become the merchant's identity", () => {
   assert.equal(merchantKey("CONEKTA*BUHOCONTABLE MONTERREY"), "CONEKTA BUHOCONTABLE");
   assert.equal(merchantKey("Conekta BuhoContable"), "CONEKTA BUHOCONTABLE");
 });
+
+test("a store that sells several unrelated things never has its category overridden", () => {
+  // Nineteen Apple charges span iCloud+, Apple Music, rented films and App
+  // Store purchases under one payee. The largest category held 53% against a
+  // 70% bar, so the history produced nothing and each email started over.
+  const lookup = buildMerchantLookup(
+    Array.from({ length: 10 }, () => ({ payee: "Apple Services LATAM", categoryId: "c1", transfer: false, type: 1 })),
+    { c1: "Tv, streaming" }
+  );
+  const { rows, changes } = applyMerchantHistory(
+    [{ date: "", account: "", amount: "-199", category: "Software, apps, games", note: "", payee: "Apple Services LATAM" }],
+    lookup
+  );
+  assert.equal(rows[0].category, "Software, apps, games");
+  assert.equal(changes.length, 0);
+});

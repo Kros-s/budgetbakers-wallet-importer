@@ -495,3 +495,24 @@ test("an existing marker is never altered, least of all the one undo matches", (
   assert.equal(rows[0].note, "[Claude reconcile 2026-07]");
   assert.equal(rows[1].note, "x [Claude 2026-09-01]");
 });
+
+test("the marker names the model that wrote the row when it was not Claude", () => {
+  // The bot gained a Codex fallback on 07-oct and kept stamping "[Claude …]".
+  // Twenty October records claimed an origin they did not have.
+  const [row] = stampMarker([{ date: "", account: "", amount: "-1", category: "Others", note: "", payee: "" }], "2026-10-12", "codex");
+  assert.equal(row.note, "[Claude 2026-10-12 codex]");
+});
+
+test("the marker is unchanged when Claude wrote the row, or when no provider is given", () => {
+  const base = { date: "", account: "", amount: "-1", category: "Others", note: "", payee: "" };
+  assert.equal(stampMarker([base], "2026-10-12", "claude")[0].note, "[Claude 2026-10-12]");
+  assert.equal(stampMarker([base], "2026-10-12")[0].note, "[Claude 2026-10-12]");
+});
+
+test("every marker still starts with [Claude, which is what audit-duplicates selects on", () => {
+  // audit-duplicates filters note.startsWith("[Claude"); naming the provider
+  // must not hide a record from the duplicate scan.
+  const [row] = stampMarker([{ date: "", account: "", amount: "-1", category: "Others", note: "OXXO", payee: "" }], "2026-10-12", "codex");
+  assert.ok(row.note.includes("[Claude"));
+  assert.ok(/\[Claude\b/.test(row.note));
+});

@@ -56,7 +56,7 @@ import { describeHeld, planWrites } from "../statements/write-policy.js";
 import { type LedgerRow, toLedgerRows, toWalletRows } from "../statements/crossing.js";
 import type { WalletRecord } from "../types.js";
 
-const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5";
+const STATEMENT_MODEL = process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5-5";
 
 interface Args {
   pdf: string;

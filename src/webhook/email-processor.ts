@@ -94,7 +94,7 @@ export interface EmailPayload {
  * overflow in long/reused sessions used to break the pipeline, and bank
  * alerts don't need a bigger model. Statements/PDFs use Sonnet elsewhere.
  */
-export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-4-5-20251001";
+export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-4-5";
 
 /** Cap on the email body fed to the prompt — bank alerts are short; anything
  * bigger is marketing bloat that can blow the context. */
@@ -117,6 +117,12 @@ const HEAD_SHARE = 0.7;
  * both for the same budget.
  */
 export function clampBody(text: string, max = MAX_BODY_CHARS): string {
+  // Layout padding must not consume the budget and displace payment facts.
+  text = text.replace(/\r\n?/g, "\n")
+    .replace(/[\u034f\u200b\u200c\u200d\u2060\ufeff]/g, "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n").trim();
   if (text.length <= max) return text;
   const head = Math.floor(max * HEAD_SHARE);
   const tail = max - head;
@@ -412,7 +418,7 @@ export async function processEmail(
     return { status: "clarification", written: 0, costUsd: result.costUsd };
   }
 
-  const extracted = stampMarker(parseCsv(csv, Object.keys(lookup.categories)), localDayStr());
+  const extracted = stampMarker(parseCsv(csv, Object.keys(lookup.categories)), localDayStr(), result.provider);
 
   // What the merchant has always been beats what one email suggests. When that
   // settles a category the model could only mark provisional, the follow-up

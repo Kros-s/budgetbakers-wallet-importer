@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { senderDomain } from "../bot/email-facts.js";
 
 /**
  * Cheap rule-based email classifier that runs BEFORE any Claude invocation.
@@ -105,6 +106,10 @@ export function setRulesForTest(rules: EmailRules | null): void {
 }
 
 export function classifyEmail(from: string, subject: string): EmailClass {
+  // Shipping updates are not fresh charges, even when they repeat an order total.
+  if (/^shipment-tracking(?:@|_at_)/i.test(from) &&
+      /^amazon\.(?:com(?:\.mx)?|es|co\.uk)$/i.test(senderDomain(from)) &&
+      /^(?:Enviado|Entregado|En reparto|Shipped|Delivered|Out for delivery)\s*:/i.test(subject)) return "block";
   if (!cached) loadRules();
   const { block, allow } = cached!.compiled;
   const haystack = `${from} ${subject}`;

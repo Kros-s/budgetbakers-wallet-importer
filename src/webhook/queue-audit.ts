@@ -72,6 +72,8 @@ export async function auditQueue(
   opts: QueueAuditOptions
 ): Promise<QueueAudit> {
   const items = ensureShortIds()
+    // These records already exist by design; their category still needs an answer.
+    .filter((i) => !i.entry.recordIds?.length)
     .filter((i) => opts.chatId === undefined || i.entry.chatId === opts.chatId)
     .map(({ entry }) => ({ entry, cents: questionAmountCents(entry) }))
     .filter((i) => i.cents > 0);

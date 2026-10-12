@@ -336,7 +336,7 @@ async function processUserTurn(
   if (csv) {
     let rows: CsvRow[];
     try {
-      rows = stampMarker(parseCsv(csv, Object.keys(deps.lookup.categories)), localDayStr());
+      rows = stampMarker(parseCsv(csv, Object.keys(deps.lookup.categories)), localDayStr(), result.provider);
     } catch (err) {
       await ctx.reply(
         `⚠️ Claude propuso un CSV pero no pude parsearlo: ${
@@ -919,7 +919,7 @@ export function registerHandlers(deps: HandlerDeps): void {
       prompt: `Lee el PDF en ${localPath} con Read (solo las primeras páginas bastan).\n\n${DETECTION_PROMPT}`,
       allowedTools: ["Read"],
       timeoutMs: 180_000,
-      model: process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5",
+      model: process.env.STATEMENT_CLAUDE_MODEL ?? "claude-sonnet-5-5",
     });
     if (!detection.ok || !looksLikeStatement(detection.text)) return false;
 

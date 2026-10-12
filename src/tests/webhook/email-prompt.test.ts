@@ -80,3 +80,19 @@ test("the prompt tells the model to record and ask, not ask instead of record", 
   assert.ok(prompt.includes("De: a@b.c"));
   assert.ok(prompt.includes("Asunto: s"));
 });
+
+
+test("layout padding cannot displace the beneficiary before the clamp", () => {
+  const body = "Enviaste $4,102\n" + " ".repeat(20_000) + "Beneficiario: Instituto Real Vizcaino\nCuenta: 4615";
+  const result = clampBody(body);
+  assert.ok(result.includes("Instituto Real Vizcaino"));
+  assert.ok(result.includes("Cuenta: 4615"));
+  assert.ok(!result.includes("se omitieron"));
+  assert.ok(result.length < 200);
+});
+test("invisible email preview padding does not consume extraction budget", () => {
+  const result = clampBody("Factura\r\n" + "͏ ​ ".repeat(5000) + "\r\nTotal $519.78\r\nVisa-1975");
+  assert.match(result, /Total \$519\.78/);
+  assert.match(result, /Visa-1975/);
+  assert.ok(result.length < 100);
+});

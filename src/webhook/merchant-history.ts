@@ -38,8 +38,19 @@ export const OVERRIDE_MIN_SHARE = 0.8;
 /** Placeholders a history may always replace. */
 const PROVISIONAL = new Set(["Others", "Uncategorized", "Unknown expense"]);
 
-/** Stores whose category is decided by the purchase, not the store. */
-const PURPOSE_DECIDES = new Set(["AMAZON", "MERCADOLIBRE", "MELI", "LIVERPOOL", "PALACIO", "SEARS", "COPPEL"]);
+/**
+ * Stores whose category is decided by the purchase, not the store.
+ *
+ * APPLE is one of them, and its absence showed how: nineteen Apple charges
+ * cover iCloud+ storage, Apple Music, rented films and App Store purchases,
+ * all billed as "Apple Services LATAM". No category can hold a majority over
+ * that mix — the largest was 53% against a 70% bar — so the history produced
+ * nothing and each email was categorised from scratch. PAYPAL is the same
+ * shape: the wallet, not the shop.
+ */
+const PURPOSE_DECIDES = new Set([
+  "AMAZON", "MERCADOLIBRE", "MELI", "LIVERPOOL", "PALACIO", "SEARS", "COPPEL", "APPLE", "PAYPAL",
+]);
 
 /**
  * Categories that are not a vote for what a merchant is. "Others" is the

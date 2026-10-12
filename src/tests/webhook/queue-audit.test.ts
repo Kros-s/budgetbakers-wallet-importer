@@ -140,3 +140,15 @@ test("a round amount is never closed on an arrival date alone — the #32 case",
   assert.equal(audit.resolved.length, 0);
   assert.equal(listClarifications().length, 1);
 });
+
+
+test("a recorded movement does not close its unresolved category question", async () => {
+  storeClarification(9999, {chatId:7,emailFrom:"notificaciones@banamex.com",emailSubject:"Compra",
+    emailText:"Fecha y hora: 15/Sep/2026 a las 13:07:22 horas",
+    claudeQuestion:"¿Qué categoría corresponde al cargo de $350.20?",
+    recordIds:["Record_35020"],provisionalCategory:"Others",createdAt:Date.now()});
+  const {couch}=fakeCouch([record(35020,"2026-09-15")]);
+  const result=await auditQueue(couch,lookup,{close:true});
+  assert.equal(result.resolved.length,0);
+  assert.equal(listClarifications().length,1);
+});
