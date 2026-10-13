@@ -33,3 +33,13 @@ test("replay is refused outside a dry run, before any email is fetched", () => {
   assertReplaySafe({ replay: true, dryRun: true });
   assertReplaySafe({ replay: false, dryRun: false });
 });
+
+test("every flag that changes what a run may do reaches the per-folder child", async () => {
+  // --replay was missing from this list. The parent accepted it, the children
+  // never saw it, so the guard had nothing to refuse and the run went live:
+  // two unapproved records in Wallet on 12-oct.
+  const { FORWARDED_FLAGS } = await import("../../batch/mailboxes.js");
+  for (const flag of ["--dry-run", "--force", "--replay"]) {
+    assert.ok(FORWARDED_FLAGS.includes(flag as never), `${flag} must be forwarded to the child`);
+  }
+});

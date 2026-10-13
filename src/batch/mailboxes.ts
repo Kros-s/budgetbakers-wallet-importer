@@ -12,6 +12,19 @@ export function processingFolders(mailboxes: { path: string; specialUse?: string
   return [...new Set([inbox.path, ...archives.map(m => m.path)])];
 }
 interface Coverage { from: string; to: string; folders: string[] }
+/**
+ * Flags the per-folder children must inherit.
+ *
+ * `--replay` was missing here and the omission was silent in the worst way:
+ * the parent accepted it, the children never saw it, so `assertReplaySafe`
+ * had nothing to refuse and the run proceeded as an ordinary LIVE pass over
+ * the pending window — writing two records to Wallet on 12-oct that nobody
+ * had approved. A flag that changes what a run may do has to reach the
+ * process that does it, so the list is named and asserted rather than
+ * inlined at the call site.
+ */
+export const FORWARDED_FLAGS = ["--dry-run", "--force", "--replay"] as const;
+
 export async function runMailboxes(argv: string[]): Promise<void> {
   acquireBatchLock();
   const file = path.resolve("data/imap/mailbox-coverage.json");
@@ -53,7 +66,7 @@ export async function runMailboxes(argv: string[]): Promise<void> {
     const childArgs = [process.argv[1], "--folder", folder, "--from", from.toISOString(), "--to", to.toISOString()];
     // --day is translated to the exact common window; --ledger-day only labels it.
     if (day) childArgs.push("--ledger-day", day);
-    for (const flag of ["--dry-run", "--force"]) if (argv.includes(flag)) childArgs.push(flag);
+    for (const flag of FORWARDED_FLAGS) if (argv.includes(flag)) childArgs.push(flag);
     const code = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(process.execPath, [...process.execArgv, ...childArgs], {
         stdio: "inherit", env: { ...process.env, BBW_BATCH_PARENT: String(process.pid) },

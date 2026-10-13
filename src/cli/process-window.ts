@@ -214,6 +214,9 @@ async function undoRun(day: string, yes: boolean, folder = "INBOX"): Promise<voi
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  // Before every dispatch below: the multi-folder branch returns early, so a
+  // guard placed after it never ran for the default invocation.
+  assertReplaySafe(args);
 
   if (args.undoRun) {
     await undoRun(args.undoRun, args.yes, args.folder);
@@ -230,7 +233,6 @@ async function main() {
     await runMailboxes(process.argv.slice(2));
     return;
   }
-  assertReplaySafe(args);
   acquireBatchLock();
   const identities = new MessageIdentities();
   const { from, to } = resolveWindow(args);
