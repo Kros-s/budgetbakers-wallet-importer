@@ -7,6 +7,7 @@
  *   npx tsx src/cli/process-window.ts --day 2026-07-25      # 20:00 → 20:00
  *   npx tsx src/cli/process-window.ts --dry-run             # propose, write nothing
  *   npx tsx src/cli/process-window.ts --force               # retry failed uids too
+ *   npx tsx src/cli/process-window.ts --dry-run --replay    # re-read processed mail
  *   npx tsx src/cli/process-window.ts --undo-run 2026-08-04 --yes
  *
  * Guarantees:
@@ -59,8 +60,10 @@ import {
   EMAIL_MODEL, EMAIL_SYSTEM_PROMPT, buildEmailPrompt, processEmail,
 } from "../webhook/email-processor.js";
 import type { EmailDeps } from "../webhook/email-processor.js";
+import { isAlreadyHandled, assertReplaySafe } from "./window-scope.js";
 
 const MAX_ATTEMPTS = 3;
+
 
 interface Args {
   from?: string;
@@ -69,6 +72,7 @@ interface Args {
   ledgerDay?: string;
   dryRun: boolean;
   force: boolean;
+  replay: boolean;
   undoRun?: string;
   yes: boolean;
   folder: string;
@@ -87,6 +91,7 @@ function parseArgs(argv: string[]): Args {
     ledgerDay: get("--ledger-day"),
     dryRun: argv.includes("--dry-run"),
     force: argv.includes("--force"),
+    replay: argv.includes("--replay"),
     undoRun: get("--undo-run"),
     yes: argv.includes("--yes"),
     folder: get("--folder") ?? "INBOX",
@@ -225,10 +230,11 @@ async function main() {
     await runMailboxes(process.argv.slice(2));
     return;
   }
+  assertReplaySafe(args);
   acquireBatchLock();
   const identities = new MessageIdentities();
   const { from, to } = resolveWindow(args);
-  console.log(`\n── process-window ${args.dryRun ? "(DRY-RUN) " : ""}──`);
+  console.log(`\n── process-window ${args.dryRun ? "(DRY-RUN) " : ""}${args.replay ? "(REPLAY) " : ""}──`);
   console.log(`   ventana: ${from.toISOString()} → ${to.toISOString()} · folder=${args.folder} · mode=${getAiMode()} · claude=${EMAIL_MODEL} · codex=${aiModels().email}\n`);
 
   // ── Phase 1: envelopes only, classify, decide what needs bodies ──
@@ -249,8 +255,7 @@ async function main() {
   const blocked: Fetched[] = [];
   const toProcess: Fetched[] = [];
   for (const env of envelopes) {
-    const known = oldStore.has(env.uid) || ledgerKnown.has(env.uid);
-    if (known && !failedRetryable.has(env.uid)) {
+    if (isAlreadyHandled(env.uid, { processed: oldStore, ledgerKnown, failedRetryable, replay: args.replay })) {
       skipped.push(env);
     } else if (classifyEmail(env.from, env.subject) === "block") {
       blocked.push(env);
