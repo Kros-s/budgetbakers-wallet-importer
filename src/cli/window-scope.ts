@@ -37,3 +37,20 @@ export function assertReplaySafe(args: { replay: boolean; dryRun: boolean }): vo
     throw new Error("--replay solo se permite con --dry-run: reprocesar correos ya escritos duplicaría registros en Wallet.");
   }
 }
+
+/**
+ * Whether a message's fingerprint should stop it from being read again.
+ *
+ * The uid store is not the only record of having seen an email. A second,
+ * independent layer dedups by Message-ID, so mail moved between folders or
+ * delivered twice is handled once. `--replay` bypassing only the uid store
+ * cleared 76 candidates for a window and then skipped all 76 on the
+ * fingerprint, reporting "already processed message (no AI)" with zero
+ * completed and zero errors — a run that looked successful and asked nothing.
+ *
+ * A replay has to ignore EVERY record of having seen the mail, or it answers
+ * no question at all.
+ */
+export function isAlreadySeenMessage(seen: boolean, replay: boolean): boolean {
+  return !replay && seen;
+}

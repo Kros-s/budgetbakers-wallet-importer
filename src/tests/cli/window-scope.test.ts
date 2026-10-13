@@ -43,3 +43,12 @@ test("every flag that changes what a run may do reaches the per-folder child", a
     assert.ok(FORWARDED_FLAGS.includes(flag as never), `${flag} must be forwarded to the child`);
   }
 });
+
+test("replay ignores the message-fingerprint layer too, not just the uid store", async () => {
+  const { isAlreadySeenMessage } = await import("../../cli/window-scope.js");
+  // Bypassing only the uid store cleared 76 candidates and then skipped all
+  // 76 on the fingerprint: zero completed, zero errors, nothing asked.
+  assert.equal(isAlreadySeenMessage(true, false), true);
+  assert.equal(isAlreadySeenMessage(true, true), false);
+  assert.equal(isAlreadySeenMessage(false, false), false);
+});

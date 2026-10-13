@@ -60,7 +60,7 @@ import {
   EMAIL_MODEL, EMAIL_SYSTEM_PROMPT, buildEmailPrompt, processEmail,
 } from "../webhook/email-processor.js";
 import type { EmailDeps } from "../webhook/email-processor.js";
-import { isAlreadyHandled, assertReplaySafe } from "./window-scope.js";
+import { isAlreadyHandled, assertReplaySafe, isAlreadySeenMessage } from "./window-scope.js";
 
 const MAX_ATTEMPTS = 3;
 
@@ -274,7 +274,7 @@ async function main() {
   }
 
   if (args.dryRun) {
-    await dryRun(toProcess, blocked, args.folder, from, to);
+    await dryRun(toProcess, blocked, args.folder, from, to, args.replay);
     return;
   }
 
@@ -582,7 +582,7 @@ async function remind(): Promise<void> {
 }
 
 /** Dry-run: fresh Haiku per email, print proposals, write NOTHING anywhere. */
-async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, from: Date, to: Date): Promise<void> {
+async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, from: Date, to: Date, replay: boolean): Promise<void> {
   const config = loadBotConfig();
   const credentials = loadDirectCredentials();
   const couch = buildCouchClient(credentials.replication);
@@ -605,7 +605,7 @@ async function dryRun(toProcess: Fetched[], blocked: Fetched[], folder: string, 
     try {
       if (!msg?.source) throw new Error("sin cuerpo");
       const fingerprint = messageFingerprint(msg.source);
-      if (identities.has(fingerprint)) { console.log("already processed message (no AI)"); continue; }
+      if (isAlreadySeenMessage(identities.has(fingerprint), replay)) { console.log("already processed message (no AI)"); continue; }
       const text = await extractBody(msg.source);
       if (!text) {
         console.log("(cuerpo vacío)");
