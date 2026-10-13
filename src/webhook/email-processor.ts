@@ -94,16 +94,16 @@ export interface EmailPayload {
  * overflow in long/reused sessions used to break the pipeline, and bank
  * alerts don't need a bigger model. Statements/PDFs use Sonnet elsewhere.
  *
- * Pinned to 4.5 by the CLI, not by choice. claude-haiku-5-5 was published on
- * 07-oct and the Models API lists it active, but the CLI on the server
- * (2.1.235) does not carry the id: in a non-interactive `-p` run it exits 1
- * with `[claude-code:unrecognized_model]`, which failed all nine candidates of
- * a dry run. Interactively it only warns, so the warning is not the signal —
- * the exit code is. CLI 2.1.296 does know the id, so this moves to
- * claude-haiku-5-5 once the server's CLI is upgraded. claude-sonnet-5-5 is
- * recognised by 2.1.235, so the statement path never had this problem.
+ * The id has to exist in the CLI on the server, not just in the Models API:
+ * extraction shells out to Claude Code. claude-haiku-5-5 was published on
+ * 07-oct and listed active, but CLI 2.1.235 did not carry it and a
+ * non-interactive `-p` run exited 1 with `[claude-code:unrecognized_model]`,
+ * failing all nine candidates of a dry run. Run interactively the same id only
+ * warned about the assumed context window and then answered, so a manual probe
+ * looked fine: the warning is not the signal, the exit code is. The server was
+ * upgraded to CLI 2.1.296 on 12-oct, which carries it.
  */
-export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-4-5";
+export const EMAIL_MODEL = process.env.EMAIL_CLAUDE_MODEL ?? "claude-haiku-5-5";
 
 /** Cap on the email body fed to the prompt — bank alerts are short; anything
  * bigger is marketing bloat that can blow the context. */
